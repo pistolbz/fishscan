@@ -11,6 +11,8 @@
 .cxx/
 *.keystore
 *.jks
+/keystore.properties
+/dist/
 
 # Bản APK mod dùng để phân tích, không đưa vào repo.
 /apk/
