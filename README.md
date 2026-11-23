@@ -2,9 +2,10 @@
 
 App Android nội bộ: chọn ảnh tài liệu trong máy, tự nhận 4 góc, căn theo khổ giấy, làm sáng rồi xuất PDF.
 
-- Chạy **hoàn toàn offline**.
+- Xử lý ảnh và tạo PDF **hoàn toàn offline**: tài liệu không bao giờ rời khỏi máy.
 - **Không cần Google Play Services.**
-- **Không xin quyền nào**: ảnh được chọn qua trình chọn ảnh của hệ thống, PDF được lưu qua hộp thoại "Lưu thành".
+- Không xin quyền đọc/ghi bộ nhớ: ảnh được chọn qua trình chọn ảnh của hệ thống, PDF được lưu qua hộp thoại "Lưu thành".
+- Chỉ dùng mạng để kiểm tra và tải bản cập nhật từ GitHub Releases.
 
 ## Tính năng (giai đoạn 1)
 
@@ -20,6 +21,35 @@ App Android nội bộ: chọn ảnh tài liệu trong máy, tự nhận 4 góc,
 Chỉnh sửa **không phá hủy**: ảnh gốc giữ nguyên, mỗi trang chỉ lưu tham số (`PageEdit`), nên mở lại sửa được bất kỳ lúc nào.
 
 Giới hạn hiện tại: danh sách trang chỉ tồn tại trong phiên làm việc. Đóng app là mất, chưa có thư viện tài liệu.
+
+## Cập nhật app (từ 0.2.0)
+
+**Khi nào app kiểm tra:** app hỏi GitHub Releases của repo khai báo trong `updateRepo` ([app/build.gradle.kts](app/build.gradle.kts)) vào hai lúc:
+- Khi mở app, tối đa 6 giờ một lần.
+- Khi bấm menu ⋮ → **Kiểm tra cập nhật**.
+
+Bản debug không tự kiểm tra.
+
+**Chọn bản nào:** bản có số phiên bản cao nhất và có file `.apk` đính kèm, kể cả bản đánh dấu *pre-release*.
+
+**Cách cập nhật:**
+1. Tải APK về, có thanh tiến trình.
+2. Kiểm tra SHA-256 theo `digest` mà GitHub cung cấp.
+3. Kiểm tra APK đúng là ScanPDF, phiên bản mới hơn và **cùng khóa ký**.
+4. Android hiện hộp thoại xác nhận cài đặt.
+
+Lần cập nhật đầu tiên, Android sẽ yêu cầu bật **"Cho phép từ nguồn này"** cho ScanPDF. Bật xong quay lại app thì quá trình cài tự tiếp tục.
+
+Repo phải để **công khai** thì app mới đọc được danh sách Releases mà không cần token.
+
+## Phát hành bản mới
+
+1. Sửa `appVersionName` trong [app/build.gradle.kts](app/build.gradle.kts), ví dụ `"0.2.1"`. `versionCode` tự tăng theo.
+2. Build và chạy test: `./gradlew :app:testDebugUnitTest :app:assembleRelease`
+   - Bản release chỉ được ký khi máy có `keystore.properties`.
+   - **Luôn dùng cùng một khóa ký**, nếu không máy người dùng sẽ không cập nhật đè được.
+3. Commit, gắn tag `vX.Y.Z` rồi `git push origin main vX.Y.Z`.
+4. Trên GitHub, tạo Release từ tag đó và đính kèm file APK. Tên file tùy ý, miễn có đuôi `.apk`.
 
 ## Build và chạy
 

@@ -29,16 +29,30 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.scanpdf.app.update.ApkInstaller
 import java.io.File
 
 @Composable
-fun ScanPdfApp(vm: ScanViewModel = viewModel()) {
+fun ScanPdfApp(vm: ScanViewModel = viewModel(), updateVm: UpdateViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     val editor by vm.editor.collectAsStateWithLifecycle()
+    val updateUi by updateVm.ui.collectAsStateWithLifecycle()
+    val updateMessage by updateVm.message.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
+
+    // Coming back from the "Install unknown apps" settings screen resumes a pending update.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { updateVm.onResume() }
+
+    LaunchedEffect(updateMessage) {
+        val message = updateMessage ?: return@LaunchedEffect
+        snackbar.showSnackbar(message)
+        updateVm.consumeMessage()
+    }
 
     // System photo picker; falls back to the document picker on devices without it.
     // No storage permission and no Google Play services needed.
@@ -71,6 +85,8 @@ fun ScanPdfApp(vm: ScanViewModel = viewModel()) {
         } else {
             HomeScreen(
                 pages = state.pages,
+                versionLabel = updateVm.currentVersion,
+                onCheckUpdate = { updateVm.check() },
                 onImport = {
                     pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                 },
@@ -92,6 +108,14 @@ fun ScanPdfApp(vm: ScanViewModel = viewModel()) {
         )
 
         state.busy?.let { BusyOverlay(it) }
+
+        UpdateDialogs(
+            state = updateUi,
+            currentVersion = updateVm.currentVersion,
+            onDownload = updateVm::download,
+            onOpenPermissionSettings = { context.startActivity(ApkInstaller.permissionSettingsIntent(context)) },
+            onDismiss = updateVm::dismiss,
+        )
     }
 }
 

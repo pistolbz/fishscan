@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Không cần quyền nào: ảnh được chọn qua Photo Picker / trình chọn file của hệ thống,
-         PDF được lưu qua hộp thoại "Lưu thành" của hệ thống. -->
+    <!-- Ảnh được chọn qua Photo Picker / trình chọn file và PDF được lưu qua hộp thoại
+         "Lưu thành" của hệ thống, nên không cần quyền đọc/ghi bộ nhớ.
+         Hai quyền dưới chỉ dùng cho tự cập nhật: hỏi GitHub Releases và cài APK mới.
+         Tài liệu không bao giờ được gửi lên mạng. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:name=".ScanPdfApplication"
@@ -23,6 +27,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Nhận kết quả cài bản cập nhật từ PackageInstaller. -->
+        <receiver
+            android:name=".update.InstallResultReceiver"
+            android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

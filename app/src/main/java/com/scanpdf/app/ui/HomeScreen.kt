@@ -20,9 +20,12 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -33,7 +36,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -47,6 +53,8 @@ import com.scanpdf.app.model.ScanPage
 @Composable
 fun HomeScreen(
     pages: List<ScanPage>,
+    versionLabel: String,
+    onCheckUpdate: () -> Unit,
     onImport: () -> Unit,
     onOpen: (Long) -> Unit,
     onDelete: (Long) -> Unit,
@@ -62,6 +70,24 @@ fun HomeScreen(
                     if (pages.isNotEmpty()) {
                         IconButton(onClick = onSharePdf) { Icon(Icons.Filled.Share, contentDescription = "Chia sẻ PDF") }
                         TextButton(onClick = onSavePdf) { Text("Lưu PDF") }
+                    }
+                    var menuOpen by remember { mutableStateOf(false) }
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Filled.MoreVert, contentDescription = "Thêm")
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Kiểm tra cập nhật") },
+                            onClick = {
+                                menuOpen = false
+                                onCheckUpdate()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Phiên bản $versionLabel") },
+                            onClick = {},
+                            enabled = false,
+                        )
                     }
                 },
             )

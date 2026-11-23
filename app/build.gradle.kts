@@ -13,6 +13,15 @@ val keystoreProps = Properties().apply {
     if (f.exists()) f.inputStream().use { load(it) }
 }
 
+// Phiên bản: chỉ sửa dòng này khi phát hành. versionCode tự suy ra (0.2.0 → 200) nên luôn tăng.
+val appVersionName = "0.2.0"
+val appVersionCode = appVersionName.split(".").map(String::toInt).let { (major, minor, patch) ->
+    major * 10_000 + minor * 100 + patch
+}
+
+// Repo GitHub chứa Releases để app tự kiểm tra cập nhật.
+val updateRepo = "pistolbz/fishscan"
+
 android {
     namespace = "com.scanpdf.app"
     compileSdk = 35
@@ -22,8 +31,9 @@ android {
         applicationId = "com.scanpdf.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
+        buildConfigField("String", "UPDATE_REPO", "\"$updateRepo\"")
 
         ndk {
             // Điện thoại thật: 64-bit và 32-bit ARM.
@@ -66,6 +76,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     packaging {
         jniLibs {
@@ -100,4 +111,5 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.opencv.desktop)
+    testImplementation(libs.org.json)
 }

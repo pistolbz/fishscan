@@ -14,6 +14,10 @@
 /keystore.properties
 /dist/
 
+# Bản scan/PDF thử nghiệm: có thể chứa tài liệu thật, không bao giờ đưa lên git.
+/output/
+*.pdf
+
 # Bản APK mod dùng để phân tích, không đưa vào repo.
 /apk/
 
