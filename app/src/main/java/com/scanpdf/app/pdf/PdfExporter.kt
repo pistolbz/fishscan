@@ -1,0 +1,38 @@
+package com.scanpdf.app.pdf
+
+import android.graphics.Bitmap
+import com.scanpdf.app.imaging.ImageLoader
+import com.scanpdf.app.imaging.PageRenderer
+import com.scanpdf.app.model.ScanPage
+import java.io.ByteArrayOutputStream
+import java.io.OutputStream
+
+object PdfExporter {
+
+    /** Long side the source photo is decoded at for export (enough for 200 DPI A4). */
+    private const val SOURCE_MAX_SIDE = 3200
+    /** Cap on the flattened page; A4 at 200 DPI is 2339 px. */
+    private const val PAGE_MAX_SIDE = 2400
+    private const val JPEG_QUALITY = 85
+
+    /** Renders pages one at a time (bounded memory) and streams them into [output]. Blocking. */
+    fun export(pages: List<ScanPage>, output: OutputStream, onProgress: (done: Int, total: Int) -> Unit) {
+        JpegPdfWriter(output).use { writer ->
+            pages.forEachIndexed { index, page ->
+                val source = ImageLoader.load(page.sourceFile, SOURCE_MAX_SIDE)
+                val rendered = PageRenderer.render(source, page.edit, PAGE_MAX_SIDE)
+                source.recycle()
+
+                val jpeg = ByteArrayOutputStream().use { buffer ->
+                    rendered.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, buffer)
+                    buffer.toByteArray()
+                }
+                val layout = PageLayout.compute(page.edit.preset, rendered.width, rendered.height)
+                rendered.recycle()
+
+                writer.addPage(jpeg, layout.pageWidth, layout.pageHeight, layout.image)
+                onProgress(index + 1, pages.size)
+            }
+        }
+    }
+}

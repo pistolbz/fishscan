@@ -1,0 +1,19 @@
+*.iml
+.gradle/
+.kotlin/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+/app/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+*.keystore
+*.jks
+
+# Bản APK mod dùng để phân tích, không đưa vào repo.
+/apk/
+
+# Tài liệu phân tích dịch ngược: chỉ giữ ở máy, không công khai.
+/docs/phan-tich-camscanner-va-ke-hoach.md
