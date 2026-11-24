@@ -20,7 +20,8 @@ App Android nội bộ: chụp hoặc chọn ảnh tài liệu, tự nhận 4 g�
 | Chỉnh góc tay | Kéo 4 chấm tròn. Khi kéo có kính lúp phóng to 2,5 lần. |
 | Căn khổ | Tự do, A4, A5, Letter, CCCD/thẻ (85,6×54 mm), danh thiếp (90×54 mm). Xuất ở 300 DPI (A4 là 2480×3508 px), ảnh gốc được đọc ở độ phân giải đầy đủ. |
 | Làm sáng | Gốc / Làm sáng / Xám / Trắng đen. "Làm sáng" gồm: làm phẳng nền (xóa bóng), levels (chữ đen tuyệt đối, nền trắng), gamma, làm nét. Có thanh chỉnh độ sáng và tương phản, xoay 90°. |
-| Tạo và xem PDF | "Tạo PDF" tạo file rồi **mở ngay trình xem trong app** (cuộn trang, chạm để phóng to). Từ đó lưu file hoặc chia sẻ (Zalo, email…). PDF chỉ được tạo lại khi tài liệu đã thay đổi. Giấy: trang đúng khổ. Thẻ: in **đúng kích thước thật** trên trang A4. |
+| Tạo và xem PDF | "Tạo PDF" tạo file rồi **mở ngay trình xem trong app** (cuộn trang, chạm để phóng to). Từ đó lưu file hoặc chia sẻ (Zalo, email…). PDF chỉ được tạo lại khi tài liệu hoặc khổ giấy đã thay đổi. |
+| Khổ giấy PDF | Chọn khi tạo PDF, hoặc đổi ngay trong trình xem. **Theo ảnh**: mỗi trang có đúng kích thước của ảnh. **A4 / A5 / Letter / Legal**: mọi trang cùng khổ, ảnh được co vừa và **căn giữa trên trang trắng**. Hướng trang tự theo ảnh. **Lề trắng**: 20 pt (~7 mm) mỗi cạnh, giống tùy chọn lề của CamScanner. Thẻ luôn in **đúng kích thước thật** trên trang dọc. Lựa chọn được lưu theo từng tài liệu, và tài liệu mới dùng lựa chọn gần nhất. |
 
 Chỉnh sửa **không phá hủy**: ảnh gốc giữ nguyên, mỗi trang chỉ lưu tham số (`PageEdit`), nên mở lại sửa được bất kỳ lúc nào.
 

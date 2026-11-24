@@ -50,6 +50,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.scanpdf.app.model.PdfSettings
 import com.scanpdf.app.model.ScanDocument
 import com.scanpdf.app.model.ScanPage
 
@@ -66,10 +67,12 @@ fun DocumentScreen(
     onOpenPage: (String) -> Unit,
     onDeletePage: (String) -> Unit,
     onMovePage: (String, Int) -> Unit,
-    onPdf: () -> Unit,
+    onCreatePdf: (PdfSettings) -> Unit,
+    onViewPdf: () -> Unit,
 ) {
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
+    var choosingPdf by remember { mutableStateOf(false) }
     val pages = document.pages
 
     Scaffold(
@@ -115,7 +118,10 @@ fun DocumentScreen(
                     OutlinedButton(onClick = onCamera) { Text("Chụp thêm") }
                     OutlinedButton(onClick = onImport) { Text("Nhập ảnh") }
                     Box(Modifier.weight(1f))
-                    Button(onClick = onPdf, enabled = pages.isNotEmpty() && pendingCaptures == 0) {
+                    Button(
+                        onClick = { if (document.isPdfFresh) onViewPdf() else choosingPdf = true },
+                        enabled = pages.isNotEmpty() && pendingCaptures == 0,
+                    ) {
                         Text(if (document.isPdfFresh) "Xem PDF" else "Tạo PDF")
                     }
                 }
@@ -136,7 +142,8 @@ fun DocumentScreen(
                     buildString {
                         append("${pages.size} trang")
                         if (pendingCaptures > 0) append(" · đang xử lý $pendingCaptures ảnh")
-                        if (document.isPdfFresh) append(" · đã có PDF")
+                        append(" · PDF: ${document.pdfSettings.label}")
+                        if (document.isPdfFresh) append(" (đã tạo)")
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -164,6 +171,12 @@ fun DocumentScreen(
         }
     }
 
+    if (choosingPdf) {
+        PdfOptionsDialog(initial = document.pdfSettings, onDismiss = { choosingPdf = false }) {
+            choosingPdf = false
+            onCreatePdf(it)
+        }
+    }
     if (renaming) {
         RenameDialog(document.title, onDismiss = { renaming = false }) {
             onRename(it)

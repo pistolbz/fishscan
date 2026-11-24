@@ -115,7 +115,8 @@ fun ScanPdfApp(vm: ScanViewModel = viewModel(), updateVm: UpdateViewModel = view
                         onOpenPage = vm::openEditor,
                         onDeletePage = vm::deletePage,
                         onMovePage = vm::movePage,
-                        onPdf = vm::createAndViewPdf,
+                        onCreatePdf = vm::createPdf,
+                        onViewPdf = vm::createAndViewPdf,
                     )
                 }
             }
@@ -133,9 +134,11 @@ fun ScanPdfApp(vm: ScanViewModel = viewModel(), updateVm: UpdateViewModel = view
                 PdfViewerScreen(
                     file = doc.pdfFile,
                     title = doc.title,
+                    settings = doc.pdfSettings,
                     onBack = vm::back,
                     onShare = { vm.sharePdf { file -> context.sharePdf(file) } },
                     onSave = { savePdf.launch(vm.suggestedFileName()) },
+                    onChangeSettings = vm::createPdf,
                 )
             }
         }

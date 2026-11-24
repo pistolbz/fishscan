@@ -3,6 +3,8 @@ package com.scanpdf.app.storage
 import com.scanpdf.app.model.FilterType
 import com.scanpdf.app.model.PageEdit
 import com.scanpdf.app.model.PaperPreset
+import com.scanpdf.app.model.PdfPageSize
+import com.scanpdf.app.model.PdfSettings
 import com.scanpdf.app.model.Pt
 import com.scanpdf.app.model.Quad
 import org.junit.Assert.assertEquals
@@ -111,6 +113,42 @@ class DocumentStoreTest {
         // Same clock value as the export: the change must still invalidate the PDF.
         val renamed = s.rename(doc.id, "Y")
         assertFalse(renamed.isPdfFresh)
+    }
+
+    @Test
+    fun pdfSettingsPersistAndChangingThemMakesThePdfStale() {
+        val s = store()
+        val letter = PdfSettings(PdfPageSize.LETTER, margin = false)
+        val doc = s.create("X", letter)
+        assertEquals(letter, s.load(doc.id)!!.pdfSettings)
+
+        s.addPage(doc.id, photo("1.jpg"), PageEdit(), true, byteArrayOf(1)).pdfFile.writeText("%PDF")
+        assertTrue(s.markPdfExported(doc.id).isPdfFresh)
+
+        val a4 = PdfSettings(PdfPageSize.A4, margin = true)
+        val changed = s.setPdfSettings(doc.id, a4)
+        assertFalse("other paper size → PDF must be rebuilt", changed.isPdfFresh)
+        assertEquals(a4, s.load(doc.id)!!.pdfSettings)
+        assertFalse(s.load(doc.id)!!.isPdfFresh)
+        assertTrue(s.markPdfExported(doc.id).isPdfFresh)
+    }
+
+    @Test
+    fun documentsSavedBeforePdfSettingsExistedStillLoad() {
+        val s = store()
+        val doc = s.create("Old")
+        s.addPage(doc.id, photo("1.jpg"), PageEdit(), true, byteArrayOf(1))
+        s.markPdfExported(doc.id)
+        // Strip the fields added in 0.3.1, as a 0.3.0 file would look.
+        val json = File(doc.dir, "document.json")
+        val obj = org.json.JSONObject(json.readText())
+        obj.remove("pdfSettings")
+        obj.getJSONObject("pdf").remove("settings")
+        json.writeText(obj.toString())
+
+        val loaded = s.load(doc.id)!!
+        assertEquals(PdfSettings(), loaded.pdfSettings)
+        assertFalse("unknown settings of the old PDF → rebuild once", loaded.isPdfFresh)
     }
 
     @Test

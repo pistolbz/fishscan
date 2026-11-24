@@ -5,6 +5,8 @@ import com.scanpdf.app.model.FilterType
 import com.scanpdf.app.model.PageEdit
 import com.scanpdf.app.model.PaperPreset
 import com.scanpdf.app.model.PdfInfo
+import com.scanpdf.app.model.PdfPageSize
+import com.scanpdf.app.model.PdfSettings
 import com.scanpdf.app.model.Pt
 import com.scanpdf.app.model.Quad
 import com.scanpdf.app.model.ScanDocument
@@ -39,12 +41,19 @@ class DocumentStore(private val root: File, private val clock: () -> Long = Syst
             .sortedByDescending { it.updatedAt }
             .map { DocumentSummary(it.id, it.title, it.updatedAt, it.pages.size, it.pages.firstOrNull()?.thumbFile) }
 
-    fun create(title: String): ScanDocument {
+    fun create(title: String, pdfSettings: PdfSettings = PdfSettings()): ScanDocument {
         val id = UUID.randomUUID().toString()
         val now = clock()
-        val doc = ScanDocument(id, title, now, now, emptyList(), null, File(root, id).apply { mkdirs() })
+        val doc = ScanDocument(id, title, now, now, emptyList(), null, File(root, id).apply { mkdirs() }, pdfSettings)
         save(doc)
         return doc
+    }
+
+    /** Changes the PDF layout. Not a content change: the PDF just becomes stale via its settings. */
+    fun setPdfSettings(docId: String, settings: PdfSettings): ScanDocument {
+        val updated = require(docId).copy(pdfSettings = settings)
+        save(updated)
+        return updated
     }
 
     fun load(id: String): ScanDocument? {
@@ -100,7 +109,9 @@ class DocumentStore(private val root: File, private val clock: () -> Long = Syst
     /** Records that [ScanDocument.pdfFile] now matches the document. Does not count as a change. */
     fun markPdfExported(docId: String): ScanDocument {
         val doc = require(docId)
-        val updated = doc.copy(pdf = PdfInfo(createdAt = maxOf(clock(), doc.updatedAt), pageCount = doc.pages.size))
+        val updated = doc.copy(
+            pdf = PdfInfo(createdAt = maxOf(clock(), doc.updatedAt), pageCount = doc.pages.size, settings = doc.pdfSettings),
+        )
         save(updated)
         return updated
     }
@@ -154,8 +165,22 @@ class DocumentStore(private val root: File, private val clock: () -> Long = Syst
             put("title", doc.title)
             put("createdAt", doc.createdAt)
             put("updatedAt", doc.updatedAt)
-            put("pdf", doc.pdf?.let { JSONObject().put("createdAt", it.createdAt).put("pageCount", it.pageCount) } ?: JSONObject.NULL)
+            put(
+                "pdf",
+                doc.pdf?.let {
+                    JSONObject().put("createdAt", it.createdAt).put("pageCount", it.pageCount)
+                        .put("settings", it.settings?.let(::settingsJson) ?: JSONObject.NULL)
+                } ?: JSONObject.NULL,
+            )
+            put("pdfSettings", settingsJson(doc.pdfSettings))
             put("pages", JSONArray().apply { doc.pages.forEach { put(pageJson(it)) } })
+        }
+
+        private fun settingsJson(s: PdfSettings) = JSONObject().put("pageSize", s.pageSize.name).put("margin", s.margin)
+
+        /** Missing (documents saved before 0.3.1) → defaults. */
+        private fun settingsFromJson(json: JSONObject?): PdfSettings? = json?.let {
+            PdfSettings(enumOr(it.optString("pageSize"), PdfPageSize.A4), it.optBoolean("margin", true))
         }
 
         internal fun fromJson(json: JSONObject, dir: File): ScanDocument {
@@ -170,7 +195,9 @@ class DocumentStore(private val root: File, private val clock: () -> Long = Syst
                     cornersDetected = p.optBoolean("detected", false),
                 )
             }
-            val pdf = json.optJSONObject("pdf")?.let { PdfInfo(it.getLong("createdAt"), it.getInt("pageCount")) }
+            val pdf = json.optJSONObject("pdf")?.let {
+                PdfInfo(it.getLong("createdAt"), it.getInt("pageCount"), settingsFromJson(it.optJSONObject("settings")))
+            }
             return ScanDocument(
                 id = json.getString("id"),
                 title = json.getString("title"),
@@ -179,6 +206,7 @@ class DocumentStore(private val root: File, private val clock: () -> Long = Syst
                 pages = pages,
                 pdf = pdf,
                 dir = dir,
+                pdfSettings = settingsFromJson(json.optJSONObject("pdfSettings")) ?: PdfSettings(),
             )
         }
 

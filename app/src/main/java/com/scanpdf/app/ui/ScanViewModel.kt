@@ -11,6 +11,8 @@ import com.scanpdf.app.imaging.ImageLoader
 import com.scanpdf.app.imaging.PageRenderer
 import com.scanpdf.app.model.DocumentSummary
 import com.scanpdf.app.model.PageEdit
+import com.scanpdf.app.model.PdfPageSize
+import com.scanpdf.app.model.PdfSettings
 import com.scanpdf.app.model.Quad
 import com.scanpdf.app.model.ScanDocument
 import com.scanpdf.app.pdf.PdfExporter
@@ -78,6 +80,13 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store = DocumentStore(File(app.filesDir, "documents"))
     private val storeLock = Mutex()
+    private val prefs = app.getSharedPreferences("pdf", android.content.Context.MODE_PRIVATE)
+
+    /** PDF layout last chosen by the user; new documents start with it. */
+    private fun lastPdfSettings(): PdfSettings = PdfSettings(
+        pageSize = PdfPageSize.entries.firstOrNull { it.name == prefs.getString("pageSize", null) } ?: PdfPageSize.A4,
+        margin = prefs.getBoolean("margin", true),
+    )
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -150,7 +159,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     fun startCameraInNewDocument() {
         viewModelScope.launch {
-            val doc = io { create(defaultTitle()) }
+            val doc = io { create(defaultTitle(), lastPdfSettings()) }
             _state.update { it.copy(document = doc, screen = Screen.Camera(doc.id)) }
         }
     }
@@ -175,7 +184,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     fun importIntoNewDocument(uris: List<Uri>) {
         if (uris.isEmpty()) return
         viewModelScope.launch {
-            val doc = io { create(defaultTitle()) }
+            val doc = io { create(defaultTitle(), lastPdfSettings()) }
             _state.update { it.copy(document = doc, screen = Screen.Document(doc.id)) }
             importImages(uris)
         }
@@ -371,6 +380,20 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Applies a page size / margin choice (remembered for new documents), rebuilds the PDF and shows
+     * it. Also used from the viewer to switch the paper size.
+     */
+    fun createPdf(settings: PdfSettings) {
+        val doc = _state.value.document ?: return
+        prefs.edit().putString("pageSize", settings.pageSize.name).putBoolean("margin", settings.margin).apply()
+        viewModelScope.launch {
+            if (settings != doc.pdfSettings) applyDocument(io { setPdfSettings(doc.id, settings) })
+            val fresh = ensurePdf() ?: return@launch
+            _state.update { it.copy(screen = Screen.Pdf(fresh.id)) }
+        }
+    }
+
     fun savePdfTo(uri: Uri) {
         viewModelScope.launch {
             val doc = ensurePdf() ?: return@launch
@@ -416,7 +439,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                 // Write next to the target, then replace it, so a failed export never leaves a broken PDF.
                 val tmp = File(doc.dir, "document.pdf.tmp")
                 tmp.outputStream().use { out ->
-                    PdfExporter.export(doc.pages, out) { done, total -> setBusy("Đang tạo PDF $done/$total…") }
+                    PdfExporter.export(doc.pages, out, doc.pdfSettings) { done, total -> setBusy("Đang tạo PDF $done/$total…") }
                 }
                 if (!tmp.renameTo(doc.pdfFile)) {
                     tmp.copyTo(doc.pdfFile, overwrite = true)

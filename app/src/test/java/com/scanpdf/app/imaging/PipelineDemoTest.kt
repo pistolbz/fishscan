@@ -2,6 +2,8 @@ package com.scanpdf.app.imaging
 
 import com.scanpdf.app.model.FilterType
 import com.scanpdf.app.model.PaperPreset
+import com.scanpdf.app.model.PdfPageSize
+import com.scanpdf.app.model.PdfSettings
 import com.scanpdf.app.model.Quad
 import com.scanpdf.app.pdf.JpegPdfWriter
 import com.scanpdf.app.pdf.PageLayout
@@ -75,25 +77,37 @@ class PipelineDemoTest {
         Imgproc.putText(cardPhoto, "CAN CUOC", Point(560.0, 520.0), Imgproc.FONT_HERSHEY_SIMPLEX, 2.0, Scalar(30.0, 30.0, 120.0), 5)
         SyntheticScenes.cameraBlur(cardPhoto)
 
-        val pdf = File(outDir, "demo.pdf")
-        JpegPdfWriter(pdf.outputStream()).use { writer ->
-            for ((name, photo, preset) in listOf(
-                Triple("a4", a4Photo, PaperPreset.A4),
-                Triple("card", cardPhoto, PaperPreset.ID_CARD),
-            )) {
-                val quad = DocumentDetector.detect(photo)?.quad
-                assertNotNull("$name: corners not found", quad)
-                save("${name}_1_detected.jpg", overlay(photo, quad!!))
+        // Third page: a free-form 3:4 photo (no paper preset), to show centring on a fixed page.
+        val pages = ArrayList<Triple<ByteArray, PaperPreset, Pair<Int, Int>>>()
+        for ((name, photo, preset) in listOf(
+            Triple("a4", a4Photo, PaperPreset.A4),
+            Triple("card", cardPhoto, PaperPreset.ID_CARD),
+            Triple("free", a4Photo, PaperPreset.AUTO),
+        )) {
+            val quad = DocumentDetector.detect(photo)?.quad
+            assertNotNull("$name: corners not found", quad)
+            save("${name}_1_detected.jpg", overlay(photo, quad!!))
 
-                val flat = PerspectiveCorrector.warp(photo, quad, preset, 2400)
-                save("${name}_2_flattened.jpg", flat)
-                val enhanced = Enhancer.apply(flat, FilterType.ENHANCE, 0f, 0f)
-                save("${name}_3_enhanced.jpg", enhanced)
+            val flat = PerspectiveCorrector.warp(photo, if (name == "free") Quad.FULL else quad, preset, 2400)
+            save("${name}_2_flattened.jpg", flat)
+            val enhanced = Enhancer.apply(flat, FilterType.ENHANCE, 0f, 0f, cleanBorders = !preset.isCard)
+            save("${name}_3_enhanced.jpg", enhanced)
+            pages += Triple(jpeg(enhanced), preset, enhanced.cols() to enhanced.rows())
+            flat.release()
+            enhanced.release()
+        }
 
-                val layout = PageLayout.compute(preset, enhanced.cols(), enhanced.rows())
-                writer.addPage(jpeg(enhanced), layout.pageWidth, layout.pageHeight, layout.image)
-                flat.release()
-                enhanced.release()
+        // Same pages, three PDF layouts.
+        for ((file, settings) in listOf(
+            "demo_a4_margin.pdf" to PdfSettings(PdfPageSize.A4, margin = true),
+            "demo_letter_nomargin.pdf" to PdfSettings(PdfPageSize.LETTER, margin = false),
+            "demo_flexible.pdf" to PdfSettings(PdfPageSize.FLEXIBLE, margin = false),
+        )) {
+            JpegPdfWriter(File(outDir, file).outputStream()).use { writer ->
+                for ((bytes, preset, size) in pages) {
+                    val layout = PageLayout.compute(preset, size.first, size.second, settings)
+                    writer.addPage(bytes, layout.pageWidth, layout.pageHeight, layout.image)
+                }
             }
         }
         println("Pipeline demo written to ${outDir.absolutePath}")

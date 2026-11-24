@@ -3,6 +3,7 @@ package com.scanpdf.app.pdf
 import android.graphics.Bitmap
 import com.scanpdf.app.imaging.ImageLoader
 import com.scanpdf.app.imaging.PageRenderer
+import com.scanpdf.app.model.PdfSettings
 import com.scanpdf.app.model.ScanPage
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
@@ -17,7 +18,12 @@ object PdfExporter {
     private const val JPEG_QUALITY = 80
 
     /** Renders pages one at a time (bounded memory) and streams them into [output]. Blocking. */
-    fun export(pages: List<ScanPage>, output: OutputStream, onProgress: (done: Int, total: Int) -> Unit) {
+    fun export(
+        pages: List<ScanPage>,
+        output: OutputStream,
+        settings: PdfSettings,
+        onProgress: (done: Int, total: Int) -> Unit,
+    ) {
         JpegPdfWriter(output).use { writer ->
             pages.forEachIndexed { index, page ->
                 val source = ImageLoader.load(page.sourceFile, SOURCE_MAX_SIDE)
@@ -28,7 +34,7 @@ object PdfExporter {
                     rendered.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, buffer)
                     buffer.toByteArray()
                 }
-                val layout = PageLayout.compute(page.edit.preset, rendered.width, rendered.height)
+                val layout = PageLayout.compute(page.edit.preset, rendered.width, rendered.height, settings)
                 rendered.recycle()
 
                 writer.addPage(jpeg, layout.pageWidth, layout.pageHeight, layout.image)

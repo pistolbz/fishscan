@@ -56,6 +56,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import com.scanpdf.app.model.PdfSettings
 import java.io.File
 
 /** Thread-safe wrapper around Android's PdfRenderer (which allows one open page at a time). */
@@ -97,10 +98,13 @@ private class PdfPages(file: File) {
 fun PdfViewerScreen(
     file: File,
     title: String,
+    settings: PdfSettings,
     onBack: () -> Unit,
     onShare: () -> Unit,
     onSave: () -> Unit,
+    onChangeSettings: (PdfSettings) -> Unit,
 ) {
+    var choosing by remember { mutableStateOf(false) }
     // Key on the modification time so a re-exported PDF is reopened.
     val pages = remember(file.path, file.lastModified()) { runCatching { PdfPages(file) }.getOrNull() }
     DisposableEffect(pages) {
@@ -116,6 +120,8 @@ fun PdfViewerScreen(
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Quay lại") }
                 },
                 actions = {
+                    // Current paper size; tap to switch (the PDF is rebuilt).
+                    TextButton(onClick = { choosing = true }) { Text(settings.pageSize.label) }
                     IconButton(onClick = onShare) { Icon(Icons.Filled.Share, contentDescription = "Chia sẻ PDF") }
                     TextButton(onClick = onSave) { Text("Lưu") }
                 },
@@ -155,6 +161,12 @@ fun PdfViewerScreen(
 
     zoomed?.let { index ->
         if (pages != null) ZoomDialog(pages, index, onDismiss = { zoomed = null })
+    }
+    if (choosing) {
+        PdfOptionsDialog(initial = settings, confirmLabel = "Tạo lại PDF", onDismiss = { choosing = false }) {
+            choosing = false
+            if (it != settings) onChangeSettings(it)
+        }
     }
 }
 
