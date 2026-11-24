@@ -46,8 +46,8 @@ class LayoutAndSizingTest {
 
     @Test
     fun outputSizingUsesPresetDpiAndRespectsCap() {
-        assertEquals(1654 to 2339, OutputSizing.compute(900.0, 1300.0, PaperPreset.A4, 4000))
-        assertEquals(2339 to 1654, OutputSizing.compute(1300.0, 900.0, PaperPreset.A4, 4000))
+        assertEquals(2480 to 3508, OutputSizing.compute(900.0, 1300.0, PaperPreset.A4, 4000)) // 300 DPI
+        assertEquals(3508 to 2480, OutputSizing.compute(1300.0, 900.0, PaperPreset.A4, 4000))
         val (w, h) = OutputSizing.compute(900.0, 1300.0, PaperPreset.A4, 1400)
         assertEquals(1400, h)
         assertEquals(990, w)

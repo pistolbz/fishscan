@@ -6,6 +6,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.scanpdf.app.imaging.DocumentDetector
 import com.scanpdf.app.imaging.ImageLoader
 import com.scanpdf.app.imaging.PageRenderer
 import com.scanpdf.app.model.PageEdit
@@ -107,11 +108,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private fun createPage(uri: Uri): ScanPage {
         val file = ImageLoader.copyToPrivateStorage(getApplication(), uri)
         val source = ImageLoader.load(file, PREVIEW_SOURCE_SIDE)
-        val detected = PageRenderer.detectCorners(source)
-        val edit = PageEdit(quad = detected ?: Quad.FULL)
+        val detection = PageRenderer.detectCorners(source)
+        // A DESKEW result still straightens the page even though no corners were found.
+        val edit = PageEdit(quad = detection?.quad ?: Quad.FULL)
         val thumb = PageRenderer.render(source, edit, THUMB_SIDE)
         source.recycle()
-        return ScanPage(nextId(), file, edit, detected != null, thumb)
+        return ScanPage(nextId(), file, edit, detection?.kind == DocumentDetector.Detection.Kind.DOCUMENT, thumb)
     }
 
     @Synchronized
@@ -177,9 +179,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     fun redetectCorners() {
         val e = _editor.value ?: return
         viewModelScope.launch {
-            val quad = withContext(Dispatchers.Default) { PageRenderer.detectCorners(e.source) }
-            if (quad == null) showMessage("Không tìm thấy đủ 4 góc, hãy kéo các góc bằng tay")
-            _editor.update { it?.copy(edit = it.edit.copy(quad = quad ?: Quad.FULL), cornersDetected = quad != null) }
+            val detection = withContext(Dispatchers.Default) { PageRenderer.detectCorners(e.source) }
+            val found = detection?.kind == DocumentDetector.Detection.Kind.DOCUMENT
+            if (!found) showMessage("Không thấy đủ 4 góc tờ giấy, hãy kéo các góc bằng tay")
+            _editor.update { it?.copy(edit = it.edit.copy(quad = detection?.quad ?: Quad.FULL), cornersDetected = found) }
         }
     }
 

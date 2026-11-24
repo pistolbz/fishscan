@@ -125,7 +125,9 @@ private fun CropControls(
 ) {
     if (!editor.cornersDetected) {
         Text(
-            "Chưa nhận đủ 4 góc. Kéo các chấm tròn tới góc tài liệu.",
+            "Ảnh không thấy đủ 4 góc tờ giấy nên app chỉ xoay thẳng dòng chữ. " +
+                "Có thể kéo các chấm tròn tới góc tài liệu. Lần sau khi chụp, hãy chừa một ít nền " +
+                "quanh tờ giấy để app tự cắt và nắn phẳng.",
             color = MaterialTheme.colorScheme.error,
             style = MaterialTheme.typography.bodySmall,
         )

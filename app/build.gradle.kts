@@ -14,7 +14,7 @@ val keystoreProps = Properties().apply {
 }
 
 // Phiên bản: chỉ sửa dòng này khi phát hành. versionCode tự suy ra (0.2.0 → 200) nên luôn tăng.
-val appVersionName = "0.2.0"
+val appVersionName = "0.2.1"
 val appVersionCode = appVersionName.split(".").map(String::toInt).let { (major, minor, patch) ->
     major * 10_000 + minor * 100 + patch
 }

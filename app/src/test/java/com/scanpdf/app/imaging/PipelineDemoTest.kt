@@ -81,7 +81,7 @@ class PipelineDemoTest {
                 Triple("a4", a4Photo, PaperPreset.A4),
                 Triple("card", cardPhoto, PaperPreset.ID_CARD),
             )) {
-                val quad = DocumentDetector.detect(photo)
+                val quad = DocumentDetector.detect(photo)?.quad
                 assertNotNull("$name: corners not found", quad)
                 save("${name}_1_detected.jpg", overlay(photo, quad!!))
 

@@ -42,9 +42,9 @@ enum class PaperPreset(
     val aspect: Float?
         get() = if (shortMm != null && longMm != null) longMm / shortMm else null
 
-    /** Target resolution for the flattened image. Cards are small, so they get more DPI. */
+    /** Target resolution for the flattened image (A4 → 2480×3508 px), like a flatbed scanner. */
     val dpi: Int
-        get() = if (isCard) 300 else 200
+        get() = 300
 }
 
 enum class FilterType(val label: String) {

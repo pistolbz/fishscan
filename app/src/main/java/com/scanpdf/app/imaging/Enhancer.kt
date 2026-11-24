@@ -2,12 +2,14 @@ package com.scanpdf.app.imaging
 
 import com.scanpdf.app.model.FilterType
 import org.opencv.core.Core
+import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.Scalar
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * Document filters. All functions take and return 3-channel RGB mats (no alpha, so brightness
@@ -51,10 +53,65 @@ object Enhancer {
         channels.forEach { it.release() }
         background.release()
 
-        // Slightly deeper blacks so text stands out on the now-white paper.
-        out.convertTo(out, -1, 1.12, -18.0)
+        applyLevels(out)
+        sharpen(out)
         return out
     }
+
+    /**
+     * Scanner-style tone curve on a flattened page: the darkest ink becomes black, paper becomes
+     * pure white, and a gamma > 1 darkens mid-tones so thin strokes stay solid. Without this,
+     * photographed print only reaches grey (~90 of 255) after flattening.
+     */
+    private fun applyLevels(img: Mat) {
+        val gray = Mat()
+        Imgproc.cvtColor(img, gray, Imgproc.COLOR_RGB2GRAY)
+        // Ink level = darkest 1% of pixels; capped so a nearly blank page is not blown up.
+        val black = percentile(gray, 0.01).coerceIn(0.0, BLACK_POINT_MAX)
+        gray.release()
+        val white = WHITE_POINT
+        val lut = Mat(1, 256, CvType.CV_8UC1)
+        val table = ByteArray(256) { v ->
+            val t = ((v - black) / (white - black)).coerceIn(0.0, 1.0)
+            (255.0 * Math.pow(t, GAMMA)).roundToInt().toByte()
+        }
+        lut.put(0, 0, table)
+        Core.LUT(img, lut, img)
+        lut.release()
+    }
+
+    /** Unsharp mask; radius scales with resolution so preview and export look alike. */
+    private fun sharpen(img: Mat) {
+        val sigma = max(0.8, max(img.cols(), img.rows()) / 2800.0)
+        val blurred = Mat()
+        Imgproc.GaussianBlur(img, blurred, Size(0.0, 0.0), sigma)
+        Core.addWeighted(img, 1.0 + SHARPEN_AMOUNT, blurred, -SHARPEN_AMOUNT, 0.0, img)
+        blurred.release()
+    }
+
+    /** Value below which [fraction] of the pixels fall (on a ≤1000 px copy, for speed). */
+    private fun percentile(gray: Mat, fraction: Double): Double {
+        val scale = min(1.0, 1000.0 / max(gray.cols(), gray.rows()))
+        val small = Mat()
+        Imgproc.resize(gray, small, Size(), scale, scale, Imgproc.INTER_AREA)
+        val bytes = ByteArray((small.total()).toInt())
+        small.get(0, 0, bytes)
+        small.release()
+        val histogram = IntArray(256)
+        for (b in bytes) histogram[b.toInt() and 0xFF]++
+        val target = bytes.size * fraction
+        var cumulative = 0
+        for (v in 0..255) {
+            cumulative += histogram[v]
+            if (cumulative >= target) return v.toDouble()
+        }
+        return 255.0
+    }
+
+    private const val BLACK_POINT_MAX = 140.0
+    private const val WHITE_POINT = 235.0
+    private const val GAMMA = 1.35
+    private const val SHARPEN_AMOUNT = 0.6
 
     private fun blackAndWhite(rgb: Mat): Mat {
         val gray = Mat()

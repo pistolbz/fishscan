@@ -2,17 +2,22 @@ package com.scanpdf.app.imaging
 
 import com.scanpdf.app.model.Pt
 import com.scanpdf.app.model.Quad
+import org.opencv.core.Core
+import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.MatOfPoint
 import org.opencv.core.MatOfPoint2f
 import org.opencv.core.Point
+import org.opencv.core.Scalar
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
@@ -20,9 +25,13 @@ import kotlin.math.sqrt
  *
  * Classic computer-vision pipeline, no ML model:
  * downscale → grayscale → blur → several edge/threshold variants → contours →
- * polygon approximation → keep convex quadrilaterals → pick the largest.
- * If no clean quadrilateral exists (e.g. rounded card corners), fall back to the
- * minimum-area rectangle around the largest blob.
+ * polygon approximation → keep convex quadrilaterals that are brighter than their
+ * surroundings → pick the largest. If no clean quadrilateral exists (e.g. rounded card
+ * corners), fall back to the minimum-area rectangle around the largest blob.
+ *
+ * When the page fills the whole photo (no corners visible) there is no outline to find;
+ * the detector then measures the tilt of the text lines and returns a quad that only
+ * straightens the page ([Detection.Kind.DESKEW]).
  */
 object DocumentDetector {
 
@@ -32,24 +41,41 @@ object DocumentDetector {
     private const val FALLBACK_MIN_AREA_RATIO = 0.20
     /** Corners must be between ~53° and ~127°; perspective makes real corners deviate from 90°. */
     private const val MAX_CORNER_COSINE = 0.6
+    /** A page/card must be at least this much brighter (0-255) than the ring just outside it. */
+    private const val MIN_PAGE_CONTRAST = 10.0
+    /** Smaller tilts are not worth a resample. */
+    private const val MIN_DESKEW_DEGREES = 0.3
+    private const val MAX_DESKEW_DEGREES = 20.0
 
     /** Pulls corners this many work-scale pixels inwards so no background sneaks into the page edge. */
     private const val INSET_PX = 3.0
 
     private class Candidate(val points: Array<Point>, val area: Double, val contour: Array<Point>)
 
-    /** @param rgb 3-channel RGB image. @return corners or null when nothing document-like was found. */
-    fun detect(rgb: Mat): Quad? {
+    data class Detection(val quad: Quad, val kind: Kind) {
+        enum class Kind {
+            /** All four corners of the document were found. */
+            DOCUMENT,
+            /**
+             * No outline (page fills the photo); the quad only straightens tilted text lines and
+             * trims background strips at the photo's edges.
+             */
+            DESKEW,
+        }
+    }
+
+    /** @param rgb 3-channel RGB image. @return null when neither a document nor tilted text was found. */
+    fun detect(rgb: Mat): Detection? {
         val scale = min(1.0, WORK_SIDE / max(rgb.cols(), rgb.rows()))
         val small = Mat()
         Imgproc.resize(rgb, small, Size(), scale, scale, Imgproc.INTER_AREA)
         val w = small.cols()
         val h = small.rows()
-        val imageArea = w.toDouble() * h
 
+        val sharpGray = Mat()
+        Imgproc.cvtColor(small, sharpGray, Imgproc.COLOR_RGB2GRAY)
         val gray = Mat()
-        Imgproc.cvtColor(small, gray, Imgproc.COLOR_RGB2GRAY)
-        Imgproc.GaussianBlur(gray, gray, Size(5.0, 5.0), 0.0)
+        Imgproc.GaussianBlur(sharpGray, gray, Size(5.0, 5.0), 0.0)
 
         // Closing removes dark text/lines inside the page so the page becomes one flat blob.
         val closed = Mat()
@@ -69,12 +95,21 @@ object DocumentDetector {
             binary.release()
         }
 
-        val best = candidates.maxByOrNull { it.area } ?: fallbacks.maxByOrNull { it.area }
+        // A real page or card is brighter than what surrounds it. This rejects text blocks, tables
+        // and pictures on a page that fills the frame, which would otherwise be cropped as "the document".
+        val plausible = { c: Candidate -> brighterThanSurroundings(gray, c.points) != false }
+        val best = candidates.filter(plausible).maxByOrNull { it.area }
+            ?: fallbacks.filter(plausible).maxByOrNull { it.area }
 
-        listOf(small, gray, closed, closeKernel).forEach { it.release() }
-        if (best == null) return null
-        val refined = refineWithLines(best.contour, best.points) ?: best.points
-        return toQuad(inset(refined, INSET_PX), w, h)
+        val result = if (best != null) {
+            val refined = refineWithLines(best.contour, best.points) ?: best.points
+            Detection(toQuad(inset(refined, INSET_PX), w, h), Detection.Kind.DOCUMENT)
+        } else {
+            straightenQuad(sharpGray, estimateSkewDegrees(sharpGray) ?: 0.0)?.let { Detection(it, Detection.Kind.DESKEW) }
+        }
+
+        listOf(small, sharpGray, gray, closed, closeKernel).forEach { it.release() }
+        return result
     }
 
     private fun collect(
@@ -116,7 +151,7 @@ object DocumentDetector {
 
                 if (convex && maxCosine(pts) < MAX_CORNER_COSINE &&
                     area >= imageArea * MIN_AREA_RATIO && area <= imageArea * MAX_AREA_RATIO &&
-                    !runsAlongBorder(pts, w, h)
+                    sidesAlongBorder(pts, w, h) < 2
                 ) {
                     candidates += Candidate(pts, area, boundary)
                     break
@@ -130,7 +165,7 @@ object DocumentDetector {
                 val box = arrayOfNulls<Point>(4)
                 rect.points(box)
                 val corners = box.requireNoNulls()
-                if (!runsAlongBorder(corners, w, h)) fallbacks += Candidate(corners, rectArea, boundary)
+                if (sidesAlongBorder(corners, w, h) < 2) fallbacks += Candidate(corners, rectArea, boundary)
             }
             c2f.release()
         }
@@ -239,21 +274,176 @@ object DocumentDetector {
     }
 
     /**
-     * True when one side of the shape lies on the image border. Such shapes are background
-     * regions split by a threshold (e.g. one bright half of an unevenly lit desk), not a document.
+     * Number of sides lying on the image border. One is fine (page slightly cut off at one edge);
+     * two or more means a slab of the frame itself, e.g. the bright half of an unevenly lit desk.
      */
-    private fun runsAlongBorder(pts: Array<Point>, w: Int, h: Int): Boolean {
+    private fun sidesAlongBorder(pts: Array<Point>, w: Int, h: Int): Int {
         val mx = w * 0.015
         val my = h * 0.015
+        var count = 0
         for (i in pts.indices) {
             val a = pts[i]
             val b = pts[(i + 1) % pts.size]
-            if (a.x < mx && b.x < mx) return true
-            if (a.x > w - 1 - mx && b.x > w - 1 - mx) return true
-            if (a.y < my && b.y < my) return true
-            if (a.y > h - 1 - my && b.y > h - 1 - my) return true
+            if ((a.x < mx && b.x < mx) || (a.x > w - 1 - mx && b.x > w - 1 - mx) ||
+                (a.y < my && b.y < my) || (a.y > h - 1 - my && b.y > h - 1 - my)
+            ) {
+                count++
+            }
         }
-        return false
+        return count
+    }
+
+    /**
+     * Compares the brightness just inside the shape with a ring just outside it.
+     * @return true/false, or null when too little of the outside ring is inside the photo to judge
+     */
+    private fun brighterThanSurroundings(gray: Mat, pts: Array<Point>): Boolean? {
+        val cx = pts.sumOf { it.x } / pts.size
+        val cy = pts.sumOf { it.y } / pts.size
+        fun scaled(f: Double) = pts.map { Point(cx + (it.x - cx) * f, cy + (it.y - cy) * f) }
+        fun ring(from: Double, to: Double): Mat {
+            val mask = Mat.zeros(gray.size(), CvType.CV_8UC1)
+            Imgproc.fillConvexPoly(mask, MatOfPoint(*scaled(to).toTypedArray()), Scalar(255.0))
+            Imgproc.fillConvexPoly(mask, MatOfPoint(*scaled(from).toTypedArray()), Scalar(0.0))
+            return mask
+        }
+        val outer = ring(1.03, 1.10)
+        val inner = ring(0.90, 0.97)
+        val expectedOuter = polygonArea(scaled(1.10)) - polygonArea(scaled(1.03))
+        val result = if (Core.countNonZero(outer) < expectedOuter * 0.15) {
+            null
+        } else {
+            Core.mean(gray, inner).`val`[0] - Core.mean(gray, outer).`val`[0] >= MIN_PAGE_CONTRAST
+        }
+        outer.release()
+        inner.release()
+        return result
+    }
+
+    private fun polygonArea(p: List<Point>): Double {
+        var s = 0.0
+        for (i in p.indices) {
+            val a = p[i]
+            val b = p[(i + 1) % p.size]
+            s += a.x * b.y - b.x * a.y
+        }
+        return abs(s) / 2
+    }
+
+    /**
+     * Tilt of the text lines in degrees (positive = lines descend to the right), or null when
+     * there are too few text lines or the page is already straight. Letters are joined into
+     * line blobs with a wide horizontal closing; each long thin blob votes with its direction.
+     */
+    internal fun estimateSkewDegrees(gray: Mat): Double? {
+        val w = gray.cols()
+        val ink = Mat()
+        Imgproc.adaptiveThreshold(gray, ink, 255.0, Imgproc.ADAPTIVE_THRESH_MEAN_C, Imgproc.THRESH_BINARY_INV, 25, 15.0)
+        val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(max(9.0, w / 40.0), 1.0))
+        Imgproc.morphologyEx(ink, ink, Imgproc.MORPH_CLOSE, kernel)
+        kernel.release()
+
+        val contours = ArrayList<MatOfPoint>()
+        val hierarchy = Mat()
+        Imgproc.findContours(ink, contours, hierarchy, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+        hierarchy.release()
+        ink.release()
+
+        val votes = ArrayList<Pair<Double, Double>>() // angle to weight (blob length)
+        for (contour in contours) {
+            val c2f = MatOfPoint2f(*contour.toArray())
+            val box = arrayOfNulls<Point>(4)
+            Imgproc.minAreaRect(c2f).points(box)
+            c2f.release()
+            contour.release()
+            val b = box.requireNoNulls()
+            val e1 = hypot(b[1].x - b[0].x, b[1].y - b[0].y)
+            val e2 = hypot(b[2].x - b[1].x, b[2].y - b[1].y)
+            val (from, to) = if (e1 >= e2) b[0] to b[1] else b[1] to b[2]
+            val long = max(e1, e2)
+            val short = max(1.0, min(e1, e2))
+            if (long < w * 0.15 || long / short < 6) continue
+            var angle = Math.toDegrees(atan2(to.y - from.y, to.x - from.x))
+            if (angle > 90) angle -= 180
+            if (angle <= -90) angle += 180
+            if (abs(angle) <= MAX_DESKEW_DEGREES) votes += angle to long
+        }
+        if (votes.size < 3) return null
+
+        // Length-weighted median: robust against the odd diagonal blob.
+        val sorted = votes.sortedBy { it.first }
+        val half = sorted.sumOf { it.second } / 2
+        var acc = 0.0
+        val median = sorted.first { acc += it.second; acc >= half }.first
+        return median.takeIf { abs(it) >= MIN_DESKEW_DEGREES }
+    }
+
+    /**
+     * For a page that fills the photo: the largest rectangle with the photo's proportions rotated by
+     * [degrees] that fits inside the photo, then trimmed of dark background strips along its edges
+     * (desk, keyboard…). A strip line is background when most of it is much darker than the paper;
+     * a column of text never is. Each side is trimmed by at most 8%.
+     * @return null when there is nothing to straighten or trim
+     */
+    private fun straightenQuad(gray: Mat, degrees: Double): Quad? {
+        val w = gray.cols()
+        val h = gray.rows()
+        val a = Math.toRadians(degrees)
+        val ca = cos(a)
+        val sa = sin(a)
+        val fit = min(w / (w * abs(ca) + h * abs(sa)), h / (w * abs(sa) + h * abs(ca)))
+        val left0 = -w * fit / 2
+        val top0 = -h * fit / 2
+        var left = left0
+        var right = -left0
+        var top = top0
+        var bottom = -top0
+
+        val px = ByteArray(w * h)
+        gray.get(0, 0, px)
+        // (x, y) in the rotated frame, origin at the photo centre.
+        fun at(x: Double, y: Double): Int {
+            val ix = (w / 2.0 + x * ca - y * sa).toInt().coerceIn(0, w - 1)
+            val iy = (h / 2.0 + x * sa + y * ca).toInt().coerceIn(0, h - 1)
+            return px[iy * w + ix].toInt() and 0xFF
+        }
+
+        // Paper brightness: a bright percentile of a grid over the central area.
+        val grid = ArrayList<Int>(1600)
+        for (i in 0 until 40) for (j in 0 until 40) {
+            grid += at(left0 * 0.8 * (1 - i / 19.5), top0 * 0.8 * (1 - j / 19.5))
+        }
+        val paper = grid.sorted()[(grid.size * 0.7).toInt()]
+        val darkBelow = paper * 0.6
+
+        fun isBackground(x0: Double, y0: Double, x1: Double, y1: Double): Boolean {
+            var dark = 0
+            for (k in 0 until 120) {
+                val t = k / 119.0
+                if (at(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t) < darkBelow) dark++
+            }
+            return dark > 72 // > 60 % of the line
+        }
+
+        val maxX = (right - left) * 0.08
+        val maxY = (bottom - top) * 0.08
+        var t = 0.0
+        while (t < maxX && isBackground(left0 + t, top0, left0 + t, -top0)) t += 1.0
+        left += t
+        t = 0.0
+        while (t < maxX && isBackground(-left0 - t, top0, -left0 - t, -top0)) t += 1.0
+        right -= t
+        t = 0.0
+        while (t < maxY && isBackground(left, top0 + t, right, top0 + t)) t += 1.0
+        top += t
+        t = 0.0
+        while (t < maxY && isBackground(left, -top0 - t, right, -top0 - t)) t += 1.0
+        bottom -= t
+
+        val trimmed = left > left0 || right < -left0 || top > top0 || bottom < -top0
+        if (degrees == 0.0 && !trimmed) return null
+        fun corner(x: Double, y: Double) = Point(w / 2.0 + x * ca - y * sa, h / 2.0 + x * sa + y * ca)
+        return toQuad(arrayOf(corner(left, top), corner(right, top), corner(right, bottom), corner(left, bottom)), w, h)
     }
 
     /** Largest |cos| of the four interior angles. 0 = perfect rectangle. */

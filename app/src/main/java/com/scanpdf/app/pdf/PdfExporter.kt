@@ -9,10 +9,10 @@ import java.io.OutputStream
 
 object PdfExporter {
 
-    /** Long side the source photo is decoded at for export (enough for 200 DPI A4). */
-    private const val SOURCE_MAX_SIDE = 3200
-    /** Cap on the flattened page; A4 at 200 DPI is 2339 px. */
-    private const val PAGE_MAX_SIDE = 2400
+    /** Long side the source photo is decoded at for export: full resolution of a 12 MP photo. */
+    private const val SOURCE_MAX_SIDE = 4096
+    /** Cap on the flattened page; A4 at 300 DPI is 3508 px. */
+    private const val PAGE_MAX_SIDE = 3600
     private const val JPEG_QUALITY = 85
 
     /** Renders pages one at a time (bounded memory) and streams them into [output]. Blocking. */

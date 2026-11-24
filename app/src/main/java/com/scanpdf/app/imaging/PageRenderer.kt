@@ -2,7 +2,6 @@ package com.scanpdf.app.imaging
 
 import android.graphics.Bitmap
 import com.scanpdf.app.model.PageEdit
-import com.scanpdf.app.model.Quad
 import org.opencv.android.Utils
 import org.opencv.core.Core
 import org.opencv.core.Mat
@@ -11,7 +10,7 @@ import org.opencv.imgproc.Imgproc
 /** Bitmap ⇄ OpenCV glue plus the full page pipeline: flatten → filter → rotate. */
 object PageRenderer {
 
-    fun detectCorners(bitmap: Bitmap): Quad? {
+    fun detectCorners(bitmap: Bitmap): DocumentDetector.Detection? {
         val rgb = toRgb(bitmap)
         try {
             return DocumentDetector.detect(rgb)

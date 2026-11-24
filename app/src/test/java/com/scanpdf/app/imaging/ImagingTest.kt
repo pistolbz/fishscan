@@ -36,6 +36,10 @@ class ImagingTest {
         private const val TOLERANCE = 0.01
     }
 
+    /** Corners only when the detector found a real document outline (not a deskew-only result). */
+    private fun documentQuad(img: Mat): Quad? =
+        DocumentDetector.detect(img)?.takeIf { it.kind == DocumentDetector.Detection.Kind.DOCUMENT }?.quad
+
     private fun assertCorners(expected: List<Point>, w: Int, h: Int, actual: Quad?, tolerance: Double = TOLERANCE) {
         assertNotNull("no document found", actual)
         val exp = expected.map { Pt((it.x / w).toFloat(), (it.y / h).toFloat()) }
@@ -56,7 +60,7 @@ class ImagingTest {
         SyntheticScenes.shadeHorizontally(img, 1.0, 0.6)
         SyntheticScenes.cameraBlur(img)
 
-        assertCorners(corners, w, h, DocumentDetector.detect(img))
+        assertCorners(corners, w, h, documentQuad(img))
         img.release()
     }
 
@@ -69,7 +73,7 @@ class ImagingTest {
         SyntheticScenes.drawPaper(img, corners, Scalar(232.0, 232.0, 228.0), 210.0, 297.0)
         SyntheticScenes.cameraBlur(img)
 
-        assertCorners(corners, w, h, DocumentDetector.detect(img))
+        assertCorners(corners, w, h, documentQuad(img))
         img.release()
     }
 
@@ -86,7 +90,7 @@ class ImagingTest {
         SyntheticScenes.cameraBlur(img)
 
         // Rounded corners: the result must be the true (sharp) corner, not a point on the arc.
-        assertCorners(sharp, w, h, DocumentDetector.detect(img), tolerance = 0.008)
+        assertCorners(sharp, w, h, documentQuad(img), tolerance = 0.008)
         img.release()
     }
 
@@ -96,8 +100,34 @@ class ImagingTest {
         // Smooth gradient: no edges at all.
         val row = ByteArray(1600 * 3) { (40 + (it / 3) * 150 / 1600).toByte() }
         for (y in 0 until 1200) img.put(y, 0, row)
-        assertNull(DocumentDetector.detect(img))
+        // May trim the dark end as "background", but must never claim a document outline.
+        assertTrue(DocumentDetector.detect(img)?.kind != DocumentDetector.Detection.Kind.DOCUMENT)
         img.release()
+    }
+
+    @Test
+    fun trimsDarkStripAtTheEdgeOfAPageThatFillsTheFrame() {
+        // Like real page 12: the page overflows the photo except on the right, where the dark
+        // keyboard shows beyond the page edge. That edge is tilted with the page (2°).
+        val w = 1200
+        val h = 1600
+        val img = SyntheticScenes.background(w, h, Scalar(45.0, 45.0, 50.0))
+        val a = Math.toRadians(2.0)
+        val corners = listOf(-0.8 to -0.8, 0.44 to -0.8, 0.44 to 0.8, -0.8 to 0.8).map { (fx, fy) ->
+            val x = fx * w
+            val y = fy * h
+            Point(w / 2.0 + x * kotlin.math.cos(a) - y * kotlin.math.sin(a), h / 2.0 + x * kotlin.math.sin(a) + y * kotlin.math.cos(a))
+        }
+        SyntheticScenes.drawPaper(img, corners, Scalar(232.0, 232.0, 228.0), 210.0, 297.0)
+        SyntheticScenes.cameraBlur(img)
+        val detection = DocumentDetector.detect(img)
+        assertEquals(DocumentDetector.Detection.Kind.DESKEW, detection?.kind)
+
+        val out = PerspectiveCorrector.warp(img, detection!!.quad, PaperPreset.AUTO, 1600)
+        val rightEdge = Core.mean(out.submat(Rect(out.cols() - 8, 0, 8, out.rows()))).`val`[0]
+        assertTrue("dark strip should be trimmed, right edge brightness $rightEdge", rightEdge > 150)
+        img.release()
+        out.release()
     }
 
     @Test
@@ -118,12 +148,12 @@ class ImagingTest {
         val img = SyntheticScenes.background(1600, 2000, Scalar(90.0, 70.0, 55.0))
         val quad = Quad(Pt(0.2f, 0.13f), Pt(0.8f, 0.16f), Pt(0.87f, 0.86f), Pt(0.13f, 0.9f))
 
-        val a4 = PerspectiveCorrector.warp(img, quad, PaperPreset.A4, 2400)
+        val a4 = PerspectiveCorrector.warp(img, quad, PaperPreset.A4, 4000)
         assertEquals(297.0 / 210.0, a4.rows().toDouble() / a4.cols(), 0.01)
-        assertEquals(2339, a4.rows()) // 297 mm at 200 DPI
+        assertEquals(3508, a4.rows()) // 297 mm at 300 DPI
         a4.release()
 
-        val card = PerspectiveCorrector.warp(img, quad, PaperPreset.ID_CARD, 2400)
+        val card = PerspectiveCorrector.warp(img, quad, PaperPreset.ID_CARD, 4000)
         assertEquals(85.6 / 53.98, card.rows().toDouble() / card.cols(), 0.01)
         card.release()
         img.release()
@@ -141,9 +171,10 @@ class ImagingTest {
         val litPaper = Core.mean(out.submat(Rect(100, 120, 100, 15))).`val`[0]
         val shadowPaper = Core.mean(out.submat(Rect(800, 120, 100, 15))).`val`[0]
         val shadowText = Core.mean(out.submat(Rect(800, 101, 100, 2))).`val`[0]
-        assertTrue("lit paper should be white, was $litPaper", litPaper > 235)
-        assertTrue("shadowed paper should be white too, was $shadowPaper", shadowPaper > 235)
-        assertTrue("text in shadow should stay dark, was $shadowText", shadowText < 110)
+        assertTrue("lit paper should be pure white, was $litPaper", litPaper > 250)
+        assertTrue("shadowed paper should be pure white too, was $shadowPaper", shadowPaper > 250)
+        // Scanner-like: print must come out black, not grey (v0.1 gave ~90 on real photos).
+        assertTrue("text in shadow should be black, was $shadowText", shadowText < 30)
         assertTrue("before: shadow was visible", abs(Core.mean(img.submat(Rect(800, 120, 100, 15))).`val`[0] - 225) > 60)
 
         val bw = Enhancer.apply(img, FilterType.BW, 0f, 0f)
@@ -151,6 +182,72 @@ class ImagingTest {
         assertTrue(Core.mean(bw.submat(Rect(800, 101, 100, 2))).`val`[0] < 60)
 
         listOf(img, out, bw).forEach { it.release() }
+    }
+
+    /** Page larger than the photo (no corners visible), text tilted 3°: like most real test photos. */
+    private fun pageFillingFrame(w: Int, h: Int, tiltDeg: Double): Mat {
+        val img = SyntheticScenes.background(w, h, Scalar(70.0, 60.0, 50.0))
+        val a = Math.toRadians(tiltDeg)
+        val corners = listOf(-1.0 to -1.0, 1.0 to -1.0, 1.0 to 1.0, -1.0 to 1.0).map { (sx, sy) ->
+            val x = sx * w * 0.65
+            val y = sy * h * 0.65
+            Point(w / 2.0 + x * kotlin.math.cos(a) - y * kotlin.math.sin(a), h / 2.0 + x * kotlin.math.sin(a) + y * kotlin.math.cos(a))
+        }
+        SyntheticScenes.drawPaper(img, corners, Scalar(232.0, 232.0, 228.0), 210.0, 297.0)
+        SyntheticScenes.cameraBlur(img)
+        return img
+    }
+
+    @Test
+    fun straightensTiltedPageThatFillsTheFrame() {
+        val img = pageFillingFrame(1200, 1600, 3.0)
+        val detection = DocumentDetector.detect(img)
+        assertNotNull("tilted text should be detected", detection)
+        assertEquals(DocumentDetector.Detection.Kind.DESKEW, detection!!.kind)
+        val q = detection.quad
+        val topAngle = Math.toDegrees(kotlin.math.atan2(((q.tr.y - q.tl.y) * 1600).toDouble(), ((q.tr.x - q.tl.x) * 1200).toDouble()))
+        assertEquals("deskew angle", 3.0, topAngle, 0.5)
+
+        // After flattening with that quad the text lines must be level.
+        val out = PerspectiveCorrector.warp(img, q, PaperPreset.AUTO, 1600)
+        val gray = Mat()
+        Imgproc.cvtColor(out, gray, Imgproc.COLOR_RGB2GRAY)
+        Imgproc.resize(gray, gray, org.opencv.core.Size(), 800.0 / out.rows(), 800.0 / out.rows(), Imgproc.INTER_AREA)
+        val residual = DocumentDetector.estimateSkewDegrees(gray) ?: 0.0
+        assertTrue("residual tilt $residual°", abs(residual) < 0.5)
+        listOf(img, out, gray).forEach { it.release() }
+    }
+
+    @Test
+    fun doesNotCropATableInsideAPageThatFillsTheFrame() {
+        // Regression for real page 13: with the page outline out of view, a bordered table on the
+        // page was taken for the document and cropped.
+        val img = pageFillingFrame(1200, 1600, 0.0)
+        Imgproc.rectangle(img, Point(200.0, 450.0), Point(1000.0, 1150.0), Scalar(30.0, 30.0, 30.0), 5)
+        val detection = DocumentDetector.detect(img)
+        assertTrue("table must not be cropped as a document", detection?.kind != DocumentDetector.Detection.Kind.DOCUMENT)
+        img.release()
+    }
+
+    @Test
+    fun detectsPageCutOffAtTheBottomEdge() {
+        val w = 1200
+        val h = 1600
+        val img = SyntheticScenes.background(w, h, Scalar(80.0, 65.0, 50.0))
+        // Bottom corners lie below the photo; only top, left and right edges are visible.
+        val corners = listOf(Point(220.0, 200.0), Point(1000.0, 230.0), Point(1060.0, 1900.0), Point(160.0, 1880.0))
+        SyntheticScenes.drawPaper(img, corners, Scalar(235.0, 235.0, 230.0), 210.0, 297.0)
+        SyntheticScenes.cameraBlur(img)
+
+        val q = documentQuad(img)
+        assertNotNull("page touching one border should still be found", q)
+        fun xAtBottom(a: Point, b: Point) = a.x + (b.x - a.x) * ((h - 1) - a.y) / (b.y - a.y)
+        val expected = listOf(
+            corners[0], corners[1],
+            Point(xAtBottom(corners[1], corners[2]), h - 1.0), Point(xAtBottom(corners[0], corners[3]), h - 1.0),
+        )
+        assertCorners(expected, w, h, q)
+        img.release()
     }
 
     @Test
