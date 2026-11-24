@@ -23,7 +23,10 @@ object PageRenderer {
         val rgb = toRgb(source)
         val warped = PerspectiveCorrector.warp(rgb, edit.quad, edit.preset, maxLongSide)
         rgb.release()
-        val filtered = Enhancer.apply(warped, edit.filter, edit.brightness, edit.contrast)
+        val filtered = Enhancer.apply(
+            warped, edit.filter, edit.brightness, edit.contrast,
+            cleanBorders = !edit.preset.isCard,
+        )
         warped.release()
         val rotated = rotate(filtered, edit.rotation)
         if (rotated !== filtered) filtered.release()

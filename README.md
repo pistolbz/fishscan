@@ -14,6 +14,7 @@ App Android nội bộ: chọn ảnh tài liệu trong máy, tự nhận 4 góc,
 | Nhập ảnh | Chọn nhiều ảnh cùng lúc. Ảnh được chép vào bộ nhớ riêng của app, xoay đúng chiều theo EXIF. |
 | Nhận 4 góc | OpenCV: Canny / Otsu → contour → `approxPolyDP`. Sau đó tinh chỉnh bằng giao điểm các cạnh (`fitLine`), nên thẻ bo góc vẫn ra đúng góc vuông. Tờ giấy phải sáng hơn vùng ngay bên ngoài, để không cắt nhầm bảng hay khối chữ bên trong trang. |
 | Giấy tràn khung | Ảnh không thấy đủ 4 góc thì app đo góc nghiêng của dòng chữ để **xoay thẳng**, và **cắt dải nền tối** (bàn, bàn phím) ở mép ảnh. App hiện cảnh báo và gợi ý lần sau chụp chừa ít nền quanh tờ giấy. |
+| Tẩy nền ở mép | Với trang giấy (không áp dụng cho thẻ), các mảng nền tối chạm mép trang được tô trắng: nêm hoặc mảng dày (sau khi "mở ảnh" để bỏ nét chữ), và vệt mỏng dài dọc theo mép. Chữ sát mép được giữ lại. |
 | Chỉnh góc tay | Kéo 4 chấm tròn. Khi kéo có kính lúp phóng to 2,5 lần. |
 | Căn khổ | Tự do, A4, A5, Letter, CCCD/thẻ (85,6×54 mm), danh thiếp (90×54 mm). Xuất ở 300 DPI (A4 là 2480×3508 px), ảnh gốc được đọc ở độ phân giải đầy đủ. |
 | Làm sáng | Gốc / Làm sáng / Xám / Trắng đen. "Làm sáng" gồm: làm phẳng nền (xóa bóng), levels (chữ đen tuyệt đối, nền trắng), gamma, làm nét. Có thanh chỉnh độ sáng và tương phản, xoay 90°. |

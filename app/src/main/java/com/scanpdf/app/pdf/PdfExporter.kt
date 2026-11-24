@@ -13,7 +13,8 @@ object PdfExporter {
     private const val SOURCE_MAX_SIDE = 4096
     /** Cap on the flattened page; A4 at 300 DPI is 3508 px. */
     private const val PAGE_MAX_SIDE = 3600
-    private const val JPEG_QUALITY = 85
+    /** Pages are mostly pure white after enhancement, so 80 is visually lossless and ~20% smaller. */
+    private const val JPEG_QUALITY = 80
 
     /** Renders pages one at a time (bounded memory) and streams them into [output]. Blocking. */
     fun export(pages: List<ScanPage>, output: OutputStream, onProgress: (done: Int, total: Int) -> Unit) {

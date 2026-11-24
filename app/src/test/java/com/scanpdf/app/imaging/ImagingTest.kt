@@ -251,6 +251,37 @@ class ImagingTest {
     }
 
     @Test
+    fun cleansDeskRemnantsAtPageEdgesButKeepsTextTouchingTheEdge() {
+        // Exactly the artefacts seen in the real v0.2.1 PDF after the tone curve: white page,
+        // a solid black desk wedge in a corner, a thin black sliver along the top edge, and a text
+        // line cut off at the left edge of a tightly framed photo.
+        val w = 2700
+        val h = 3600
+        val img = Mat(h, w, CvType.CV_8UC3, Scalar.all(255.0))
+        val black = Scalar.all(0.0)
+        val wedge = MatOfPoint(Point(0.0, 0.0), Point(120.0, 0.0), Point(0.0, 900.0))
+        Imgproc.fillConvexPoly(img, wedge, black)
+        val sliver = MatOfPoint(Point(700.0, 0.0), Point(2400.0, 0.0), Point(2400.0, 6.0), Point(700.0, 22.0))
+        Imgproc.fillConvexPoly(img, sliver, black)
+        // Glyph-sized blocks (large ~14 pt letters); the line at y=1970 starts right at x=0.
+        for (y in 1200 until 3300 step 110) {
+            var x = if (y == 1970) 0 else 300
+            while (x < 2400) {
+                Imgproc.rectangle(img, Point(x.toDouble(), y.toDouble()), Point(x + 28.0, y + 40.0), black, -1)
+                x += 45
+            }
+        }
+
+        Enhancer.whitenBorderBackground(img)
+        fun mean(r: Rect) = Core.mean(img.submat(r)).`val`[0]
+        assertTrue("corner wedge should become white, was ${mean(Rect(0, 0, 40, 300))}", mean(Rect(0, 0, 40, 300)) > 245)
+        assertTrue("top sliver should become white, was ${mean(Rect(800, 0, 1500, 5))}", mean(Rect(800, 0, 1500, 5)) > 245)
+        assertTrue("letters touching the left edge must stay, was ${mean(Rect(0, 1970, 28, 40))}", mean(Rect(0, 1970, 28, 40)) < 30)
+        assertTrue("normal text must stay, was ${mean(Rect(300, 1200, 28, 40))}", mean(Rect(300, 1200, 28, 40)) < 30)
+        listOf(img, wedge, sliver).forEach { it.release() }
+    }
+
+    @Test
     fun brightnessSliderNeverBreaksThreeChannelImage() {
         val img = Mat(100, 100, CvType.CV_8UC3, Scalar(120.0, 120.0, 120.0))
         val out = Enhancer.apply(img, FilterType.ORIGINAL, 0.3f, 0.2f)

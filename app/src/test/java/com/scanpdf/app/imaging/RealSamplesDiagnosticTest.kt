@@ -56,7 +56,7 @@ class RealSamplesDiagnosticTest {
             )
             // Full pipeline result (flatten/deskew + "Làm sáng"), as the app would export it.
             val flat = PerspectiveCorrector.warp(rgb, quad ?: Quad.FULL, PaperPreset.AUTO, 3600)
-            val enhanced = Enhancer.apply(flat, FilterType.ENHANCE, 0f, 0f)
+            val enhanced = Enhancer.apply(flat, FilterType.ENHANCE, 0f, 0f, cleanBorders = true)
             val enhancedBgr = Mat()
             Imgproc.cvtColor(enhanced, enhancedBgr, Imgproc.COLOR_RGB2BGR)
             Imgcodecs.imwrite(File(out, photo.nameWithoutExtension + "_result.jpg").path, enhancedBgr)

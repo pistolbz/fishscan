@@ -21,7 +21,11 @@ import kotlin.math.roundToInt
  */
 object Enhancer {
 
-    fun apply(rgb: Mat, filter: FilterType, brightness: Float, contrast: Float): Mat {
+    /**
+     * @param cleanBorders paint white the dark background (desk, keyboard) that touches the edges of
+     *   a paper page. Leave false for cards, whose printed design may legitimately reach the edge.
+     */
+    fun apply(rgb: Mat, filter: FilterType, brightness: Float, contrast: Float, cleanBorders: Boolean = false): Mat {
         val out = when (filter) {
             FilterType.ORIGINAL -> rgb.clone()
             FilterType.ENHANCE -> flatten(rgb)
@@ -35,8 +39,89 @@ object Enhancer {
             }
             FilterType.BW -> blackAndWhite(rgb)
         }
+        if (cleanBorders && filter != FilterType.ORIGINAL) whitenBorderBackground(out)
         adjust(out, brightness, contrast)
         return out
+    }
+
+    /**
+     * Paints white the thick dark regions that touch the image edge: desk or keyboard left in the
+     * corners when the page filled the photo. An opening first removes thin strokes, so text that
+     * reaches the edge is kept; only solid areas thicker than ~7 px (at 1200 px) are cleaned.
+     */
+    internal fun whitenBorderBackground(img: Mat) {
+        val gray = Mat()
+        Imgproc.cvtColor(img, gray, Imgproc.COLOR_RGB2GRAY)
+        val scale = min(1.0, 1200.0 / max(gray.cols(), gray.rows()))
+        val dark = Mat()
+        Imgproc.resize(gray, dark, Size(), scale, scale, Imgproc.INTER_AREA)
+        gray.release()
+        Imgproc.threshold(dark, dark, 110.0, 255.0, Imgproc.THRESH_BINARY_INV)
+        val w = dark.cols()
+        val h = dark.rows()
+        val fill = Mat.zeros(dark.size(), CvType.CV_8UC1)
+        val match = Mat()
+
+        // Pass 1: thin slivers lying along an edge (a strip of desk seen past the page edge).
+        // Letters touching the edge are separate short components, so they never qualify.
+        forEachComponent(dark) { labels, label, x, y, bw, bh, _ ->
+            val alongTop = y == 0 && bh <= h * 0.03 && bw >= w * 0.10
+            val alongBottom = y + bh >= h && bh <= h * 0.03 && bw >= w * 0.10
+            val alongLeft = x == 0 && bw <= w * 0.03 && bh >= h * 0.10
+            val alongRight = x + bw >= w && bw <= w * 0.03 && bh >= h * 0.10
+            if (alongTop || alongBottom || alongLeft || alongRight) {
+                Core.compare(labels, Scalar(label.toDouble()), match, Core.CMP_EQ)
+                Core.bitwise_or(fill, match, fill)
+            }
+        }
+
+        // Pass 2: thick dark areas touching an edge (desk wedge in a corner). The opening removes
+        // text strokes first so only solid regions remain.
+        val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_ELLIPSE, Size(7.0, 7.0))
+        Imgproc.morphologyEx(dark, dark, Imgproc.MORPH_OPEN, kernel)
+        kernel.release()
+        // ≈ 70×70 px at 300 DPI: bigger than any letter, smaller than a desk wedge.
+        val minArea = w * h * 0.0005
+        forEachComponent(dark) { labels, label, x, y, bw, bh, area ->
+            val touchesEdge = x == 0 || y == 0 || x + bw >= w || y + bh >= h
+            if (touchesEdge && area >= minArea) {
+                Core.compare(labels, Scalar(label.toDouble()), match, Core.CMP_EQ)
+                Core.bitwise_or(fill, match, fill)
+            }
+        }
+        if (Core.countNonZero(fill) > 0) {
+            // Grow a little to also catch the anti-aliased fringe of the region.
+            val grow = Imgproc.getStructuringElement(Imgproc.MORPH_ELLIPSE, Size(5.0, 5.0))
+            Imgproc.dilate(fill, fill, grow)
+            grow.release()
+            val full = Mat()
+            Imgproc.resize(fill, full, img.size(), 0.0, 0.0, Imgproc.INTER_NEAREST)
+            img.setTo(Scalar(255.0, 255.0, 255.0), full)
+            full.release()
+        }
+        listOf(dark, fill, match).forEach { it.release() }
+    }
+
+    /** Runs [block] for every connected component of [binary] with its bounding box and area. */
+    private inline fun forEachComponent(
+        binary: Mat,
+        block: (labels: Mat, label: Int, x: Int, y: Int, w: Int, h: Int, area: Double) -> Unit,
+    ) {
+        val labels = Mat()
+        val stats = Mat()
+        val centroids = Mat()
+        val count = Imgproc.connectedComponentsWithStats(binary, labels, stats, centroids)
+        for (label in 1 until count) {
+            block(
+                labels, label,
+                stats.get(label, Imgproc.CC_STAT_LEFT)[0].toInt(),
+                stats.get(label, Imgproc.CC_STAT_TOP)[0].toInt(),
+                stats.get(label, Imgproc.CC_STAT_WIDTH)[0].toInt(),
+                stats.get(label, Imgproc.CC_STAT_HEIGHT)[0].toInt(),
+                stats.get(label, Imgproc.CC_STAT_AREA)[0],
+            )
+        }
+        listOf(labels, stats, centroids).forEach { it.release() }
     }
 
     private fun flatten(rgb: Mat): Mat {
