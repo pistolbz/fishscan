@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <cache-path name="exports" path="exports/" />
+    <!-- PDF của từng tài liệu trong thư viện (filesDir/documents/<id>/document.pdf). -->
+    <files-path name="documents" path="documents/" />
 </paths>

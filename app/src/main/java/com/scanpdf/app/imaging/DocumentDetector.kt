@@ -69,11 +69,27 @@ object DocumentDetector {
         val scale = min(1.0, WORK_SIDE / max(rgb.cols(), rgb.rows()))
         val small = Mat()
         Imgproc.resize(rgb, small, Size(), scale, scale, Imgproc.INTER_AREA)
-        val w = small.cols()
-        val h = small.rows()
+        val gray = Mat()
+        Imgproc.cvtColor(small, gray, Imgproc.COLOR_RGB2GRAY)
+        small.release()
+        return try {
+            detectGray(gray, allowDeskew = true)
+        } finally {
+            gray.release()
+        }
+    }
 
+    /**
+     * Same as [detect] on a single-channel image, e.g. the Y plane of a camera frame (no colour
+     * conversion needed). Images larger than the working size are downscaled first.
+     * @param allowDeskew false for the live camera preview, which only wants a real outline
+     */
+    fun detectGray(grayInput: Mat, allowDeskew: Boolean = true): Detection? {
+        val scale = min(1.0, WORK_SIDE / max(grayInput.cols(), grayInput.rows()))
         val sharpGray = Mat()
-        Imgproc.cvtColor(small, sharpGray, Imgproc.COLOR_RGB2GRAY)
+        if (scale < 1.0) Imgproc.resize(grayInput, sharpGray, Size(), scale, scale, Imgproc.INTER_AREA) else grayInput.copyTo(sharpGray)
+        val w = sharpGray.cols()
+        val h = sharpGray.rows()
         val gray = Mat()
         Imgproc.GaussianBlur(sharpGray, gray, Size(5.0, 5.0), 0.0)
 
@@ -104,11 +120,13 @@ object DocumentDetector {
         val result = if (best != null) {
             val refined = refineWithLines(best.contour, best.points) ?: best.points
             Detection(toQuad(inset(refined, INSET_PX), w, h), Detection.Kind.DOCUMENT)
-        } else {
+        } else if (allowDeskew) {
             straightenQuad(sharpGray, estimateSkewDegrees(sharpGray) ?: 0.0)?.let { Detection(it, Detection.Kind.DESKEW) }
+        } else {
+            null
         }
 
-        listOf(small, sharpGray, gray, closed, closeKernel).forEach { it.release() }
+        listOf(sharpGray, gray, closed, closeKernel).forEach { it.release() }
         return result
     }
 

@@ -14,7 +14,7 @@ val keystoreProps = Properties().apply {
 }
 
 // Phiên bản: chỉ sửa dòng này khi phát hành. versionCode tự suy ra (0.2.0 → 200) nên luôn tăng.
-val appVersionName = "0.2.2"
+val appVersionName = "0.3.0"
 val appVersionCode = appVersionName.split(".").map(String::toInt).let { (major, minor, patch) ->
     major * 10_000 + minor * 100 + patch
 }
@@ -105,6 +105,10 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.core)
     implementation(libs.androidx.exifinterface)
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
     implementation(libs.opencv)
 
     debugImplementation(libs.androidx.compose.ui.tooling)

@@ -1,14 +1,42 @@
 package com.scanpdf.app.model
 
-import android.graphics.Bitmap
 import java.io.File
 
 data class ScanPage(
-    val id: Long,
-    /** Private copy of the imported photo. Never modified. */
+    val id: String,
+    /** The photo as taken/imported. Never modified (non-destructive editing). */
     val sourceFile: File,
+    /** Small rendered preview; its name changes with every edit, so caches never show a stale one. */
+    val thumbFile: File,
     val edit: PageEdit,
-    /** True when the detector found all four corners; false means the full photo is used. */
+    /** True when the detector found all four corners of the document. */
     val cornersDetected: Boolean,
-    val thumbnail: Bitmap,
+)
+
+/** When the document's PDF was last generated. */
+data class PdfInfo(val createdAt: Long, val pageCount: Int)
+
+data class ScanDocument(
+    val id: String,
+    val title: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val pages: List<ScanPage>,
+    val pdf: PdfInfo?,
+    /** Folder holding the photos, thumbnails, document.json and document.pdf. */
+    val dir: File,
+) {
+    val pdfFile: File get() = File(dir, "document.pdf")
+
+    /** The PDF exists and nothing changed since it was made. */
+    val isPdfFresh: Boolean
+        get() = pdf != null && pdf.createdAt >= updatedAt && pdf.pageCount == pages.size && pdfFile.exists()
+}
+
+data class DocumentSummary(
+    val id: String,
+    val title: String,
+    val updatedAt: Long,
+    val pageCount: Int,
+    val cover: File?,
 )

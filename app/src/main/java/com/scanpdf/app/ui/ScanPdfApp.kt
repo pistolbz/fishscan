@@ -22,7 +22,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -53,16 +56,6 @@ fun ScanPdfApp(vm: ScanViewModel = viewModel(), updateVm: UpdateViewModel = view
         snackbar.showSnackbar(message)
         updateVm.consumeMessage()
     }
-
-    // System photo picker; falls back to the document picker on devices without it.
-    // No storage permission and no Google Play services needed.
-    val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
-        vm.importImages(uris)
-    }
-    val createPdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
-        if (uri != null) vm.exportTo(uri)
-    }
-
     LaunchedEffect(state.message) {
         val message = state.message ?: return@LaunchedEffect
         // Consume only after showing: consuming first would change the key and cancel this effect.
@@ -70,35 +63,84 @@ fun ScanPdfApp(vm: ScanViewModel = viewModel(), updateVm: UpdateViewModel = view
         vm.consumeMessage()
     }
 
+    // System photo picker (falls back to the document picker): no storage permission needed.
+    var importIntoNew by rememberSaveable { mutableStateOf(false) }
+    val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
+        if (importIntoNew) vm.importIntoNewDocument(uris) else vm.importImages(uris)
+    }
+    fun pickPhotos(intoNewDocument: Boolean) {
+        importIntoNew = intoNewDocument
+        pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    }
+    val savePdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        if (uri != null) vm.savePdfTo(uri)
+    }
+
+    BackHandler(enabled = state.screen != Screen.Library || editor != null) { vm.back() }
+
     Box(Modifier.fillMaxSize()) {
+        val doc = state.document
         val currentEditor = editor
-        if (currentEditor != null) {
-            BackHandler { vm.closeEditor() }
-            EditScreen(
-                editor = currentEditor,
-                onBack = vm::closeEditor,
-                onDone = vm::saveEditor,
-                onEdit = vm::updateEdit,
-                onRedetect = vm::redetectCorners,
-                onFullImage = vm::useFullImage,
-            )
-        } else {
-            HomeScreen(
-                pages = state.pages,
+        when (state.screen) {
+            Screen.Library -> LibraryScreen(
+                documents = state.library,
                 versionLabel = updateVm.currentVersion,
+                onOpen = vm::openDocument,
+                onNewCamera = vm::startCameraInNewDocument,
+                onNewImport = { pickPhotos(intoNewDocument = true) },
+                onRename = vm::renameFromLibrary,
+                onDelete = vm::deleteFromLibrary,
                 onCheckUpdate = { updateVm.check() },
-                onImport = {
-                    pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                },
-                onOpen = vm::openEditor,
-                onDelete = vm::deletePage,
-                onMove = vm::movePage,
-                onSavePdf = { createPdf.launch(vm.suggestedFileName()) },
-                onSharePdf = { vm.exportForShare { file -> context.sharePdf(file) } },
             )
+
+            is Screen.Document -> if (doc != null) {
+                if (currentEditor != null) {
+                    EditScreen(
+                        editor = currentEditor,
+                        onBack = vm::closeEditor,
+                        onDone = vm::saveEditor,
+                        onEdit = vm::updateEdit,
+                        onRedetect = vm::redetectCorners,
+                        onFullImage = vm::useFullImage,
+                    )
+                } else {
+                    DocumentScreen(
+                        document = doc,
+                        pendingCaptures = state.pendingCaptures,
+                        onBack = vm::back,
+                        onRename = vm::renameDocument,
+                        onDelete = vm::deleteCurrentDocument,
+                        onCamera = vm::openCamera,
+                        onImport = { pickPhotos(intoNewDocument = false) },
+                        onOpenPage = vm::openEditor,
+                        onDeletePage = vm::deletePage,
+                        onMovePage = vm::movePage,
+                        onPdf = vm::createAndViewPdf,
+                    )
+                }
+            }
+
+            is Screen.Camera -> CameraScreen(
+                pageCount = doc?.pages?.size ?: 0,
+                pendingCount = state.pendingCaptures,
+                lastThumb = doc?.pages?.lastOrNull()?.thumbFile,
+                onCaptured = vm::addCapturedPhoto,
+                onDone = vm::leaveCamera,
+                onError = vm::reportError,
+            )
+
+            is Screen.Pdf -> if (doc != null) {
+                PdfViewerScreen(
+                    file = doc.pdfFile,
+                    title = doc.title,
+                    onBack = vm::back,
+                    onShare = { vm.sharePdf { file -> context.sharePdf(file) } },
+                    onSave = { savePdf.launch(vm.suggestedFileName()) },
+                )
+            }
         }
 
-        // App-level so messages also appear on the edit screen.
+        // App-level so messages also appear on the edit, camera and PDF screens.
         SnackbarHost(
             snackbar,
             Modifier

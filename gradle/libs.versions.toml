@@ -6,6 +6,7 @@ activityCompose = "1.9.3"
 lifecycle = "2.8.7"
 composeBom = "2024.12.01"
 exifinterface = "1.3.7"
+camerax = "1.4.2"
 # OpenCV for Android (app). Desktop build below is only used by JVM unit tests.
 opencv = "4.12.0"
 opencvDesktop = "4.9.0-0"
@@ -25,6 +26,10 @@ androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "u
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 androidx-compose-material-icons-core = { group = "androidx.compose.material", name = "material-icons-core" }
 androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version.ref = "exifinterface" }
+androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "camerax" }
+androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
+androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
+androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 opencv = { group = "org.opencv", name = "opencv", version.ref = "opencv" }
 opencv-desktop = { group = "org.openpnp", name = "opencv", version.ref = "opencvDesktop" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }

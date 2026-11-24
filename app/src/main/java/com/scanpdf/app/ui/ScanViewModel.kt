@@ -9,10 +9,12 @@ import androidx.lifecycle.viewModelScope
 import com.scanpdf.app.imaging.DocumentDetector
 import com.scanpdf.app.imaging.ImageLoader
 import com.scanpdf.app.imaging.PageRenderer
+import com.scanpdf.app.model.DocumentSummary
 import com.scanpdf.app.model.PageEdit
 import com.scanpdf.app.model.Quad
-import com.scanpdf.app.model.ScanPage
+import com.scanpdf.app.model.ScanDocument
 import com.scanpdf.app.pdf.PdfExporter
+import com.scanpdf.app.storage.DocumentStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -26,14 +28,29 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+sealed interface Screen {
+    data object Library : Screen
+    data class Document(val docId: String) : Screen
+    data class Camera(val docId: String) : Screen
+    data class Pdf(val docId: String) : Screen
+}
+
 data class UiState(
-    val pages: List<ScanPage> = emptyList(),
+    val screen: Screen = Screen.Library,
+    val library: List<DocumentSummary> = emptyList(),
+    /** The open document (Document, Camera, Pdf screens). */
+    val document: ScanDocument? = null,
+    /** Camera photos still being processed in the background. */
+    val pendingCaptures: Int = 0,
     /** Non-null while a long task runs; shown in a blocking overlay. */
     val busy: String? = null,
     /** One-shot message for the snackbar. */
@@ -41,7 +58,7 @@ data class UiState(
 )
 
 data class EditorState(
-    val pageId: Long,
+    val pageId: String,
     /** Upright photo at preview resolution, used by the corner editor. */
     val source: Bitmap,
     val edit: PageEdit,
@@ -59,34 +76,124 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         const val THUMB_SIDE = 360
     }
 
+    private val store = DocumentStore(File(app.filesDir, "documents"))
+    private val storeLock = Mutex()
+
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     private val _editor = MutableStateFlow<EditorState?>(null)
     val editor: StateFlow<EditorState?> = _editor.asStateFlow()
 
-    private var nextId = 1L
     private var previewJob: Job? = null
 
     init {
-        // Pages live only for this session, so leftovers from earlier sessions can go.
         viewModelScope.launch(Dispatchers.IO) {
-            File(app.cacheDir, "imports").deleteRecursively()
-            File(app.cacheDir, "exports").deleteRecursively()
+            // Temporary files only; documents live in filesDir.
+            listOf("imports", "exports", "capture").forEach { File(app.cacheDir, it).deleteRecursively() }
+        }
+        refreshLibrary()
+    }
+
+    /** Serialised, off-main-thread access to the document store. */
+    private suspend fun <T> io(block: DocumentStore.() -> T): T =
+        storeLock.withLock { withContext(Dispatchers.IO) { store.block() } }
+
+    /** Updates the open document, unless the user meanwhile opened another one. */
+    private fun applyDocument(doc: ScanDocument) =
+        _state.update { if (it.document?.id == doc.id) it.copy(document = doc) else it }
+
+    // ---------- Navigation ----------
+
+    fun back() {
+        if (_editor.value != null) {
+            closeEditor()
+            return
+        }
+        when (val screen = _state.value.screen) {
+            Screen.Library -> Unit
+            is Screen.Document -> closeDocument()
+            is Screen.Camera -> leaveCamera()
+            is Screen.Pdf -> _state.update { it.copy(screen = Screen.Document(screen.docId)) }
         }
     }
 
-    // ---------- Import ----------
+    fun refreshLibrary() {
+        viewModelScope.launch {
+            val docs = io { list() }
+            _state.update { it.copy(library = docs) }
+        }
+    }
+
+    fun openDocument(id: String) {
+        viewModelScope.launch {
+            val doc = io { load(id) }
+            if (doc == null) {
+                showMessage("Không mở được tài liệu")
+                refreshLibrary()
+                return@launch
+            }
+            _state.update { it.copy(document = doc, screen = Screen.Document(id)) }
+        }
+    }
+
+    fun closeDocument() {
+        val s = _state.value
+        val doc = s.document
+        viewModelScope.launch {
+            // An empty document (e.g. camera opened then closed) is not worth keeping.
+            if (doc != null && doc.pages.isEmpty() && s.pendingCaptures == 0) io { delete(doc.id) }
+            _state.update { it.copy(document = null, screen = Screen.Library) }
+            refreshLibrary()
+        }
+    }
+
+    fun startCameraInNewDocument() {
+        viewModelScope.launch {
+            val doc = io { create(defaultTitle()) }
+            _state.update { it.copy(document = doc, screen = Screen.Camera(doc.id)) }
+        }
+    }
+
+    fun openCamera() {
+        val doc = _state.value.document ?: return
+        _state.update { it.copy(screen = Screen.Camera(doc.id)) }
+    }
+
+    fun leaveCamera() {
+        val s = _state.value
+        val doc = s.document ?: return
+        if (doc.pages.isEmpty() && s.pendingCaptures == 0) {
+            closeDocument()
+        } else {
+            _state.update { it.copy(screen = Screen.Document(doc.id)) }
+        }
+    }
+
+    // ---------- Adding pages ----------
+
+    fun importIntoNewDocument(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        viewModelScope.launch {
+            val doc = io { create(defaultTitle()) }
+            _state.update { it.copy(document = doc, screen = Screen.Document(doc.id)) }
+            importImages(uris)
+        }
+    }
 
     fun importImages(uris: List<Uri>) {
+        val docId = _state.value.document?.id ?: return
         if (uris.isEmpty()) return
         viewModelScope.launch {
             var failed = 0
+            var missing = 0
             uris.forEachIndexed { index, uri ->
                 setBusy("Đang nhận diện ảnh ${index + 1}/${uris.size}…")
                 try {
-                    val page = withContext(Dispatchers.Default) { createPage(uri) }
-                    _state.update { it.copy(pages = it.pages + page) }
+                    val file = withContext(Dispatchers.IO) { ImageLoader.copyToPrivateStorage(getApplication(), uri) }
+                    val prepared = withContext(Dispatchers.Default) { preparePage(file) }
+                    if (!prepared.detected) missing++
+                    applyDocument(io { addPage(docId, file, prepared.edit, prepared.detected, prepared.thumb) })
                 } catch (e: Exception) {
                     Log.e(TAG, "import failed: $uri", e)
                     failed++
@@ -94,55 +201,101 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
             }
             setBusy(null)
             val ok = uris.size - failed
-            val missing = _state.value.pages.takeLast(ok).count { !it.cornersDetected }
             showMessage(
                 buildString {
-                    append("Đã nhập $ok ảnh")
+                    append("Đã thêm $ok ảnh")
                     if (failed > 0) append(", lỗi $failed ảnh")
-                    if (missing > 0) append(". $missing ảnh chưa nhận đủ góc, hãy chỉnh tay")
+                    if (missing > 0) append(". $missing ảnh không thấy đủ 4 góc giấy")
                 },
             )
         }
     }
 
-    private fun createPage(uri: Uri): ScanPage {
-        val file = ImageLoader.copyToPrivateStorage(getApplication(), uri)
+    /** A photo just taken by the in-app camera; processed in the background while shooting continues. */
+    fun addCapturedPhoto(file: File) {
+        val docId = _state.value.document?.id ?: return
+        _state.update { it.copy(pendingCaptures = it.pendingCaptures + 1) }
+        viewModelScope.launch {
+            try {
+                val prepared = withContext(Dispatchers.Default) { preparePage(file) }
+                applyDocument(io { addPage(docId, file, prepared.edit, prepared.detected, prepared.thumb) })
+            } catch (e: Exception) {
+                Log.e(TAG, "capture processing failed", e)
+                showMessage("Không xử lý được ảnh vừa chụp")
+            } finally {
+                _state.update { it.copy(pendingCaptures = it.pendingCaptures - 1) }
+            }
+        }
+    }
+
+    private class PreparedPage(val edit: PageEdit, val detected: Boolean, val thumb: ByteArray)
+
+    private fun preparePage(file: File): PreparedPage {
         val source = ImageLoader.load(file, PREVIEW_SOURCE_SIDE)
-        val detection = PageRenderer.detectCorners(source)
-        // A DESKEW result still straightens the page even though no corners were found.
-        val edit = PageEdit(quad = detection?.quad ?: Quad.FULL)
-        val thumb = PageRenderer.render(source, edit, THUMB_SIDE)
-        source.recycle()
-        return ScanPage(nextId(), file, edit, detection?.kind == DocumentDetector.Detection.Kind.DOCUMENT, thumb)
+        try {
+            val detection = PageRenderer.detectCorners(source)
+            // A DESKEW result still straightens the page even though no corners were found.
+            val edit = PageEdit(quad = detection?.quad ?: Quad.FULL)
+            val thumb = PageRenderer.render(source, edit, THUMB_SIDE)
+            val detected = detection?.kind == DocumentDetector.Detection.Kind.DOCUMENT
+            return PreparedPage(edit, detected, thumb.toJpeg())
+        } finally {
+            source.recycle()
+        }
     }
 
-    @Synchronized
-    private fun nextId() = nextId++
+    // ---------- Document & page list ----------
 
-    // ---------- Page list ----------
+    fun deletePage(pageId: String) = mutateDocument { deletePage(it, pageId) }
 
-    fun deletePage(id: Long) {
-        val page = _state.value.pages.firstOrNull { it.id == id } ?: return
-        _state.update { s -> s.copy(pages = s.pages.filterNot { it.id == id }) }
-        viewModelScope.launch(Dispatchers.IO) { page.sourceFile.delete() }
+    fun movePage(pageId: String, delta: Int) = mutateDocument { movePage(it, pageId, delta) }
+
+    fun renameDocument(title: String) = mutateDocument { rename(it, title) }
+
+    fun renameFromLibrary(id: String, title: String) {
+        viewModelScope.launch {
+            io { rename(id, title) }
+            refreshLibrary()
+        }
     }
 
-    fun movePage(id: Long, delta: Int) {
-        _state.update { s ->
-            val list = s.pages.toMutableList()
-            val from = list.indexOfFirst { it.id == id }
-            val to = from + delta
-            if (from < 0 || to !in list.indices) return@update s
-            list.add(to, list.removeAt(from))
-            s.copy(pages = list)
+    fun deleteCurrentDocument() {
+        val doc = _state.value.document ?: return
+        viewModelScope.launch {
+            io { delete(doc.id) }
+            _state.update { it.copy(document = null, screen = Screen.Library) }
+            refreshLibrary()
+            showMessage("Đã xóa tài liệu")
+        }
+    }
+
+    fun reportError(text: String) = showMessage(text)
+
+    fun deleteFromLibrary(id: String) {
+        viewModelScope.launch {
+            io { delete(id) }
+            refreshLibrary()
+            showMessage("Đã xóa tài liệu")
+        }
+    }
+
+    private fun mutateDocument(op: DocumentStore.(docId: String) -> ScanDocument) {
+        val docId = _state.value.document?.id ?: return
+        viewModelScope.launch {
+            try {
+                applyDocument(io { op(docId) })
+            } catch (e: Exception) {
+                Log.e(TAG, "document update failed", e)
+                showMessage("Không lưu được thay đổi")
+            }
         }
     }
 
     // ---------- Editor ----------
 
     @OptIn(FlowPreview::class)
-    fun openEditor(id: Long) {
-        val page = _state.value.pages.firstOrNull { it.id == id } ?: return
+    fun openEditor(pageId: String) {
+        val page = _state.value.document?.pages?.firstOrNull { it.id == pageId } ?: return
         viewModelScope.launch {
             setBusy("Đang mở ảnh…")
             val source = try {
@@ -163,9 +316,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                     .distinctUntilChanged()
                     .debounce(120)
                     .collectLatest { (src, edit) ->
-                        val rendered = withContext(Dispatchers.Default) {
-                            PageRenderer.render(src, edit, PREVIEW_PAGE_SIDE)
-                        }
+                        val rendered = withContext(Dispatchers.Default) { PageRenderer.render(src, edit, PREVIEW_PAGE_SIDE) }
                         _editor.update { e -> if (e != null && e.edit == edit) e.copy(preview = rendered) else e }
                     }
             }
@@ -190,19 +341,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     fun saveEditor() {
         val e = _editor.value ?: return
+        val docId = _state.value.document?.id ?: return
         viewModelScope.launch {
-            val thumb = withContext(Dispatchers.Default) { PageRenderer.render(e.source, e.edit, THUMB_SIDE) }
-            _state.update { s ->
-                s.copy(
-                    pages = s.pages.map {
-                        if (it.id == e.pageId) {
-                            it.copy(edit = e.edit, thumbnail = thumb, cornersDetected = it.cornersDetected || e.edit.quad != Quad.FULL)
-                        } else {
-                            it
-                        }
-                    },
-                )
-            }
+            val thumb = withContext(Dispatchers.Default) { PageRenderer.render(e.source, e.edit, THUMB_SIDE).toJpeg() }
+            val detected = e.cornersDetected || e.edit.quad != Quad.FULL
+            applyDocument(io { updatePage(docId, e.pageId, e.edit, detected, thumb) })
             closeEditor()
         }
     }
@@ -213,52 +356,82 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         _editor.value = null
     }
 
-    // ---------- Export ----------
+    // ---------- PDF ----------
 
-    fun suggestedFileName(): String =
-        "scan_" + SimpleDateFormat("yyyyMMdd_HHmm", Locale.ROOT).format(Date()) + ".pdf"
+    fun suggestedFileName(): String {
+        val title = _state.value.document?.title ?: "scan"
+        return title.replace(Regex("[\\\\/:*?\"<>|]"), "-").trim().ifEmpty { "scan" } + ".pdf"
+    }
 
-    fun exportTo(uri: Uri) {
-        val pages = _state.value.pages
-        if (pages.isEmpty()) return
+    /** Builds the PDF if the document changed since the last one, then opens the viewer. */
+    fun createAndViewPdf() {
         viewModelScope.launch {
-            val ok = runExport(pages) {
-                val stream = getApplication<Application>().contentResolver.openOutputStream(uri)
-                    ?: throw IllegalStateException("Không ghi được file")
-                stream.use { out -> PdfExporter.export(pages, out, ::onExportProgress) }
-            }
-            if (ok) showMessage("Đã lưu PDF (${pages.size} trang)")
+            val doc = ensurePdf() ?: return@launch
+            _state.update { it.copy(screen = Screen.Pdf(doc.id)) }
         }
     }
 
-    /** Writes the PDF into the app cache and hands the file to [onReady] (for the share sheet). */
-    fun exportForShare(onReady: (File) -> Unit) {
-        val pages = _state.value.pages
-        if (pages.isEmpty()) return
+    fun savePdfTo(uri: Uri) {
         viewModelScope.launch {
-            val file = File(File(getApplication<Application>().cacheDir, "exports").apply { mkdirs() }, suggestedFileName())
-            val ok = runExport(pages) {
-                file.outputStream().use { out -> PdfExporter.export(pages, out, ::onExportProgress) }
+            val doc = ensurePdf() ?: return@launch
+            try {
+                withContext(Dispatchers.IO) {
+                    val out = getApplication<Application>().contentResolver.openOutputStream(uri)
+                        ?: throw IllegalStateException("Không ghi được file")
+                    out.use { o -> doc.pdfFile.inputStream().use { it.copyTo(o) } }
+                }
+                showMessage("Đã lưu PDF (${doc.pages.size} trang)")
+            } catch (e: Exception) {
+                Log.e(TAG, "save failed", e)
+                showMessage("Lưu PDF thất bại: ${e.message}")
             }
-            if (ok) onReady(file)
         }
     }
 
-    private suspend fun runExport(pages: List<ScanPage>, block: () -> Unit): Boolean {
-        setBusy("Đang tạo PDF 0/${pages.size}…")
+    /** Shares a copy named after the document, so the recipient sees a meaningful file name. */
+    fun sharePdf(onReady: (File) -> Unit) {
+        viewModelScope.launch {
+            val doc = ensurePdf() ?: return@launch
+            val copy = withContext(Dispatchers.IO) {
+                val dir = File(getApplication<Application>().cacheDir, "exports").apply {
+                    deleteRecursively()
+                    mkdirs()
+                }
+                doc.pdfFile.copyTo(File(dir, suggestedFileName()), overwrite = true)
+            }
+            onReady(copy)
+        }
+    }
+
+    private suspend fun ensurePdf(): ScanDocument? {
+        val doc = _state.value.document ?: return null
+        if (doc.pages.isEmpty()) {
+            showMessage("Tài liệu chưa có trang nào")
+            return null
+        }
+        if (doc.isPdfFresh) return doc
+        setBusy("Đang tạo PDF 0/${doc.pages.size}…")
         return try {
-            withContext(Dispatchers.Default) { block() }
-            true
+            withContext(Dispatchers.Default) {
+                // Write next to the target, then replace it, so a failed export never leaves a broken PDF.
+                val tmp = File(doc.dir, "document.pdf.tmp")
+                tmp.outputStream().use { out ->
+                    PdfExporter.export(doc.pages, out) { done, total -> setBusy("Đang tạo PDF $done/$total…") }
+                }
+                if (!tmp.renameTo(doc.pdfFile)) {
+                    tmp.copyTo(doc.pdfFile, overwrite = true)
+                    tmp.delete()
+                }
+            }
+            io { markPdfExported(doc.id) }.also(::applyDocument)
         } catch (e: Exception) {
             Log.e(TAG, "export failed", e)
-            showMessage("Xuất PDF thất bại: ${e.message}")
-            false
+            showMessage("Tạo PDF thất bại: ${e.message}")
+            null
         } finally {
             setBusy(null)
         }
     }
-
-    private fun onExportProgress(done: Int, total: Int) = setBusy("Đang tạo PDF $done/$total…")
 
     // ---------- Misc ----------
 
@@ -267,4 +440,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private fun setBusy(text: String?) = _state.update { it.copy(busy = text) }
 
     private fun showMessage(text: String) = _state.update { it.copy(message = text) }
+
+    private fun defaultTitle(): String =
+        "Tài liệu " + SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.ROOT).format(Date())
+
+    private fun Bitmap.toJpeg(): ByteArray = ByteArrayOutputStream().use { buffer ->
+        compress(Bitmap.CompressFormat.JPEG, 80, buffer)
+        buffer.toByteArray()
+    }
 }
